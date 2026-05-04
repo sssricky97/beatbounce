@@ -1,0 +1,95 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #b8e1ff;
+  color: #2a2440;
+  font-family: 'Fredoka', system-ui, sans-serif;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+}
+
+#game-wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #ffd8a3 0%, #ffb88a 22%, #b8e1ff 60%, #87ceeb 100%);
+}
+
+#game {
+  width: 100%;
+  height: 100%;
+}
+
+#game canvas {
+  display: block;
+  margin: 0 auto;
+  image-rendering: auto;
+}
+
+#loader {
+  position: fixed;
+  inset: 0;
+  z-index: 99;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(180deg, #ffd8a3 0%, #b8e1ff 65%);
+  transition: opacity 0.5s ease;
+}
+#loader.hidden { opacity: 0; pointer-events: none; }
+
+.loader-inner { text-align: center; }
+
+.bouncy {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 22px;
+  background: #ffd95a;
+  border: 4px solid #2a2440;
+  border-radius: 50%;
+  position: relative;
+  box-shadow: 0 6px 0 0 #2a2440;
+  animation: bounce 0.7s cubic-bezier(.5,0,.3,1) infinite;
+}
+.bouncy::before, .bouncy::after {
+  content: '';
+  position: absolute;
+  top: 18px;
+  width: 10px;
+  height: 14px;
+  background: #2a2440;
+  border-radius: 50%;
+}
+.bouncy::before { left: 16px; }
+.bouncy::after  { right: 16px; }
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  45%      { transform: translateY(-22px) scaleY(1.08); }
+  60%      { transform: translateY(0) scaleY(0.85) scaleX(1.15); }
+  75%      { transform: translateY(0) scaleY(1.04) scaleX(0.96); }
+}
+
+.loader-text {
+  font-family: 'Fredoka', sans-serif;
+  font-weight: 700;
+  font-size: 18px;
+  letter-spacing: 0.18em;
+  color: #2a2440;
+}
+
+@media (max-width: 500px) {
+  .loader-text { font-size: 14px; letter-spacing: 0.12em; }
+}
