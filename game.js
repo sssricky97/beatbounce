@@ -10,10 +10,22 @@ const BPM = 90;
 const BEAT_MS = 60000 / BPM; // ~666.67 ms
 const PLAYER_X = GAME_W / 2;
 
+// Achievement ranks: E unlocks at 500m, then every +300m bumps the rank up.
+// Each entry has the unlock height in metres, the rank letter, an accent
+// colour for the badge and a tagline shown under the letter.
+const ACHIEVEMENTS = [
+  { meters: 500,  rank: 'E', color: 0x9adf7a, hex: '#9adf7a', tag: 'NICE START!' },
+  { meters: 800,  rank: 'D', color: 0x6dd0ff, hex: '#6dd0ff', tag: 'KEEP CLIMBING!' },
+  { meters: 1100, rank: 'C', color: 0xffd95a, hex: '#ffd95a', tag: 'GREAT JUMPS!' },
+  { meters: 1400, rank: 'B', color: 0xff9a4a, hex: '#ff9a4a', tag: 'BLAZING UP!' },
+  { meters: 1700, rank: 'A', color: 0xff7aa8, hex: '#ff7aa8', tag: 'AMAZING!' },
+  { meters: 2000, rank: 'S', color: 0xb582ff, hex: '#b582ff', tag: 'SUPER STAR!' }
+];
+
 const DIFFICULTY = {
-  easy:   { gravity: 1400, gapMult: 0.70, rampMult: 0.45, widthMult: 1.20, driftRangeMult: 0.35, driftSpeedMult: 0.55, jumpMult: 1.10, label: 'EASY',   color: 0x9adf7a },
-  medium: { gravity: 1700, gapMult: 1.00, rampMult: 1.00, widthMult: 1.00, driftRangeMult: 1.00, driftSpeedMult: 1.00, jumpMult: 1.00, label: 'MEDIUM', color: 0xffd95a },
-  hard:   { gravity: 1980, gapMult: 1.40, rampMult: 1.80, widthMult: 0.78, driftRangeMult: 1.65, driftSpeedMult: 1.55, jumpMult: 0.92, label: 'HARD',   color: 0xff7aa8 }
+  easy:   { gravity: 1700, gapMult: 0.70, rampMult: 0.45, widthMult: 1.20, driftRangeMult: 0.35, driftSpeedMult: 0.55, jumpMult: 1.05, label: 'EASY',   color: 0x9adf7a },
+  medium: { gravity: 2000, gapMult: 1.00, rampMult: 1.00, widthMult: 1.00, driftRangeMult: 1.00, driftSpeedMult: 1.00, jumpMult: 1.00, label: 'MEDIUM', color: 0xffd95a },
+  hard:   { gravity: 2300, gapMult: 1.18, rampMult: 1.50, widthMult: 0.85, driftRangeMult: 1.30, driftSpeedMult: 1.20, jumpMult: 0.96, label: 'HARD',   color: 0xff7aa8 }
 };
 
 const COLORS = {
@@ -55,14 +67,25 @@ class AudioManager {
   }
   resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); }
   setMuted(m) {
-    this.muted = m;
+    this.muted = !!m;
+    // Mirror to Phaser's sound system so loaded mp3s (e.g. the game-over clip)
+    // also obey this toggle.
+    try {
+      if (typeof game !== 'undefined' && game && game.sound) game.sound.mute = this.muted;
+    } catch (e) {}
     if (!this.ctx) return;
-    this.musicGain.gain.setTargetAtTime(m ? 0 : this.musicVolume, this.ctx.currentTime, 0.05);
-    this.fxGain.gain.setTargetAtTime(m ? 0 : this.fxVolume, this.ctx.currentTime, 0.05);
+    // Instant cut/restore — cancel any in-flight ramps then snap the gain.
+    const t = this.ctx.currentTime;
+    this.musicGain.gain.cancelScheduledValues(t);
+    this.fxGain.gain.cancelScheduledValues(t);
+    this.musicGain.gain.setValueAtTime(this.muted ? 0 : this.musicVolume, t);
+    this.fxGain.gain.setValueAtTime(this.muted ? 0 : this.fxVolume, t);
+    // When muting, also stop the rolling beat loop so no scheduled hits fire.
+    if (this.muted) this.stopBeatLoop();
   }
 
   startBeatLoop() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     this.stopBeatLoop();
     let count = 0;
     const tick = () => {
@@ -81,7 +104,7 @@ class AudioManager {
   }
 
   _kick() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     const g = this.ctx.createGain();
@@ -93,7 +116,7 @@ class AudioManager {
     o.start(t); o.stop(t + 0.34);
   }
   _clap() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.18, this.ctx.sampleRate);
     const d = buf.getChannelData(0);
@@ -106,7 +129,7 @@ class AudioManager {
     n.connect(bp).connect(g).connect(this.musicGain); n.start(t);
   }
   _hat() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.04, this.ctx.sampleRate);
     const d = buf.getChannelData(0);
@@ -120,7 +143,7 @@ class AudioManager {
   }
 
   playBoing(strength = 1) {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     o.type = 'triangle';
@@ -136,7 +159,7 @@ class AudioManager {
     o.start(t); o.stop(t + 0.36);
   }
   playPop() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     o.type = 'square';
@@ -149,7 +172,7 @@ class AudioManager {
     o.start(t); o.stop(t + 0.14);
   }
   playLand() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     o.type = 'sine';
@@ -162,7 +185,7 @@ class AudioManager {
     o.start(t); o.stop(t + 0.18);
   }
   playCheer() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     [660, 880, 1100, 1320].forEach((f, i) => {
       const o = this.ctx.createOscillator();
@@ -178,7 +201,7 @@ class AudioManager {
     });
   }
   playBuzz() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     o.type = 'sawtooth';
@@ -191,20 +214,22 @@ class AudioManager {
     o.start(t); o.stop(t + 0.36);
   }
   playClick() {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
+    if (!this.ctx || this.muted) return;
+    // Schedule a hair in the future so a freshly-resumed AudioContext doesn't
+    // miss the start-time. Also louder + longer so it's clearly audible.
+    const t = this.ctx.currentTime + 0.04;
     const o = this.ctx.createOscillator();
     o.type = 'triangle';
     const g = this.ctx.createGain();
-    o.frequency.setValueAtTime(820, t);
-    o.frequency.exponentialRampToValueAtTime(620, t + 0.07);
-    g.gain.setValueAtTime(0.2, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.1);
+    o.frequency.setValueAtTime(900, t);
+    o.frequency.exponentialRampToValueAtTime(580, t + 0.10);
+    g.gain.setValueAtTime(0.55, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18);
     o.connect(g).connect(this.fxGain);
-    o.start(t); o.stop(t + 0.12);
+    o.start(t); o.stop(t + 0.20);
   }
   playMetronome() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     o.type = 'sine';
@@ -217,7 +242,7 @@ class AudioManager {
     o.start(t); o.stop(t + 0.06);
   }
   playFail() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator();
     o.type = 'triangle';
@@ -231,7 +256,7 @@ class AudioManager {
     o.start(t); o.stop(t + 0.34);
   }
   playWhoosh() {
-    if (!this.ctx) return;
+    if (!this.ctx || this.muted) return;
     const t = this.ctx.currentTime;
     const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * 0.6, this.ctx.sampleRate);
     const d = buf.getChannelData(0);
@@ -256,7 +281,7 @@ const AUDIO = new AudioManager();
 // ---------- Storage ----------
 const STORE_KEY = 'beatbouncejump:v1';
 function loadProgress() {
-  const def = { bestHeight: 0, bestCombo: 0, muted: false, autoRhythm: false, autoRhythmTutorialSeen: false, lastDifficulty: 'medium' };
+  const def = { bestHeight: 0, bestCombo: 0, muted: false, autoRhythm: false, autoRhythmTutorialSeen: false, lastDifficulty: 'medium', bestRank: -1 };
   try { return Object.assign(def, JSON.parse(localStorage.getItem(STORE_KEY)) || {}); }
   catch (e) { return def; }
 }
@@ -303,6 +328,16 @@ class BeatManager {
 // =================================================================
 class BootScene extends Phaser.Scene {
   constructor() { super('Boot'); }
+  preload() {
+    // Game-over voice clip
+    this.load.audio('fail', 'sounds/faaaa.mp3');
+    // Long-jump voice clip (plays on a strong/charged jump)
+    this.load.audio('longjump', 'sounds/uiiiiiiii.mp3');
+    // Jump tone (plays on every jump)
+    this.load.audio('jump', 'sounds/jump.mp3');
+    // Star/note pickup clip
+    this.load.audio('star', 'sounds/star.mp3');
+  }
   create() {
     // Note (music note) texture
     const note = this.make.graphics({ x: 0, y: 0, add: false });
@@ -368,6 +403,7 @@ class BootScene extends Phaser.Scene {
 
     // pre-generate all bubble color textures so spawning never pays the cost
     BUBBLE_PALETTE.forEach(c => ensureBubbleTexture(this, c));
+    BUBBLE_PALETTE.forEach(c => ensureDiscoTileLitTexture(this, c));
 
     const el = document.getElementById('loader');
     if (el) el.classList.add('hidden');
@@ -864,9 +900,10 @@ class Player {
   }
 
   performJump(strength, onBeat) {
-    // strength: 0..1. Floor is high enough that a quick tap clears typical gaps.
-    const baseVy = -780;
-    const maxVy = -1240;
+    // strength: 0..1. Floor is high enough that even a quick tap clears the
+    // largest typical gap on any difficulty (snappy jump-game feel).
+    const baseVy = -920;
+    const maxVy = -1420;
     let vy = Phaser.Math.Linear(baseVy, maxVy, Phaser.Math.Clamp(strength, 0, 1));
     if (onBeat) vy *= 1.18;
     const diffKey = this.scene.difficulty;
@@ -994,6 +1031,111 @@ function ensureBubbleTexture(scene, color) {
   return key;
 }
 
+// Disco-floor tile (idle): glossy, semi-transparent glass panel with subtle
+// LED dots and a glassy sheen on top. Drawn into the same texture canvas as
+// the bubble (same W/H/TOP) so swapping at runtime preserves origin and scale.
+function ensureDiscoTileTexture(scene, color) {
+  const key = 'discotile_' + color.toString(16);
+  if (scene.textures.exists(key)) return key;
+  const W = BUBBLE_TEX_W, H = BUBBLE_TEX_H;
+  const top = BUBBLE_TEX_TOP;
+  const padX = 8;
+  const tileH = 58;
+  const tileW = W - padX * 2;
+  const x = padX;
+  const y = top;
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+
+  // very faint tinted halo so the glass isn't invisible against the sky
+  g.fillStyle(color, 0.05);
+  g.fillEllipse(x + tileW / 2, y + tileH / 2, tileW + 18, tileH + 14);
+
+  // single sheet of clear glass, slightly tinted
+  g.fillStyle(0xffffff, 0.13);
+  g.fillRoundedRect(x, y, tileW, tileH, 14);
+
+  // glossy reflection across the upper half (gives the wet-floor look)
+  g.fillStyle(0xffffff, 0.40);
+  g.fillRoundedRect(x + 6, y + 4, tileW - 12, 8, 4);
+  // subtle secondary reflection lower down
+  g.fillStyle(0xffffff, 0.18);
+  g.fillRoundedRect(x + 16, y + tileH * 0.55, tileW - 32, 4, 2);
+
+  // top-edge highlight (the surface where the player lands)
+  g.fillStyle(0xffffff, 0.65);
+  g.fillRoundedRect(x + 4, y, tileW - 8, 2, 1);
+
+  // soft glass outline (no battery-style segmentation, no dots)
+  g.lineStyle(1.5, 0xffffff, 0.55);
+  g.strokeRoundedRect(x, y, tileW, tileH, 14);
+  g.lineStyle(1, color, 0.40);
+  g.strokeRoundedRect(x + 1, y + 1, tileW - 2, tileH - 2, 13);
+
+  g.generateTexture(key, W, H);
+  g.destroy();
+  return key;
+}
+
+// Disco-floor lit pill: a horizontal glowing tube. Rendered as a near-white
+// base with luminance variation only — the actual color is applied at runtime
+// via 4-corner tints that shift over time, producing the smooth multi-color
+// gradient that flows across the tube.
+function ensureDiscoTileLitTexture(scene, _color) {
+  const key = 'discotile_lit_pill';
+  if (scene.textures.exists(key)) return key;
+  const W = BUBBLE_TEX_W, H = BUBBLE_TEX_H;
+  const top = BUBBLE_TEX_TOP;
+
+  const padX = 6;
+  const tubeH = 26;
+  const tubeW = W - padX * 2;
+  const x = padX;
+  const y = top;
+  const r = tubeH / 2;  // pill shape: corner radius = half height
+
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+
+  // Just the bar itself — no halo, no shadow box. Anything outside the pill
+  // shape stays fully transparent so there's no rectangular backdrop.
+
+  // Main pill body (white base — tinted at runtime)
+  g.fillStyle(0xffffff, 1);
+  g.fillRoundedRect(x, y, tubeW, tubeH, r);
+
+  // Brighter upper half for the "lit from inside" pop after tinting
+  g.fillStyle(0xffffff, 0.55);
+  g.fillRoundedRect(x + 2, y + 2, tubeW - 4, Math.round(tubeH * 0.55), r * 0.8);
+
+  // Hot top stripe (the glossy reflection along the surface)
+  g.fillStyle(0xffffff, 0.95);
+  g.fillRoundedRect(x + 8, y + 1, tubeW - 16, 2, 1);
+
+  g.generateTexture(key, W, H);
+  g.destroy();
+  return key;
+}
+
+// HSV → 24-bit RGB hex int. Used to compute smoothly cycling neon colors for
+// per-platform 4-corner tint animation in disco mode.
+function hsvHex(h, s, v) {
+  h = ((h % 1) + 1) % 1;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  let R, G, B;
+  switch (i % 6) {
+    case 0: R = v; G = t; B = p; break;
+    case 1: R = q; G = v; B = p; break;
+    case 2: R = p; G = v; B = t; break;
+    case 3: R = p; G = q; B = v; break;
+    case 4: R = t; G = p; B = v; break;
+    default: R = v; G = p; B = q; break;
+  }
+  return ((R * 255) & 0xff) << 16 | ((G * 255) & 0xff) << 8 | ((B * 255) & 0xff);
+}
+
 class Platform {
   constructor(scene, x, y, type, width = 110) {
     this.scene = scene;
@@ -1036,13 +1178,65 @@ class Platform {
     this.gfx = scene.add.graphics();
     this.container.add(this.gfx);
     if (type === 'pencil') {
-      const key = ensureBubbleTexture(scene, this._bubbleColor);
+      const useDisco = !!scene.discoMode;
+      // In disco mode every tile uses the glowing pill texture so the floor
+      // stays lit permanently. The non-disco state still uses bubbles.
+      const key = useDisco
+        ? ensureDiscoTileLitTexture(scene, this._bubbleColor)
+        : ensureBubbleTexture(scene, this._bubbleColor);
       this.bubbleImg = scene.add.image(0, -this.height / 2, key);
       this.bubbleImg.setOrigin(0.5, BUBBLE_TEX_TOP / BUBBLE_TEX_H);
       this.bubbleImg.setScale(this.width / BUBBLE_TEX_W);
       this.container.add(this.bubbleImg);
+      this._discoPhase = Math.random() * Math.PI * 2;
     }
     this.draw();
+  }
+
+  applyDiscoStyle(on) {
+    if (this.type !== 'pencil' || !this.bubbleImg || !this.bubbleImg.scene) return;
+    const tw = this.scene.tweens;
+    tw.killTweensOf(this.bubbleImg);
+    const baseScale = this.width / BUBBLE_TEX_W;
+    this.bubbleImg.setScale(baseScale);
+    if (on) {
+      this.bubbleImg.setTexture(ensureDiscoTileLitTexture(this.scene, 0));
+      // Per-platform phase so colors travel along the floor like a wave
+      if (this._discoPhase === undefined) {
+        this._discoPhase = Math.random() * Math.PI * 2;
+      }
+    } else {
+      this.bubbleImg.setTexture(ensureBubbleTexture(this.scene, this._bubbleColor));
+      if (this.bubbleImg.clearTint) this.bubbleImg.clearTint();
+    }
+  }
+
+  // Jump-off feedback: quick scale pulse + sparkle burst so the player feels
+  // they kicked off the floor. The tile itself is already glowing so we
+  // exaggerate it briefly instead of swapping textures.
+  flashDisco() {
+    if (this.type !== 'pencil' || !this.bubbleImg || !this.bubbleImg.scene) return;
+    if (!this.scene.discoMode) return;
+    const tw = this.scene.tweens;
+    tw.killTweensOf(this.bubbleImg);
+    const baseScale = this.width / BUBBLE_TEX_W;
+    this.bubbleImg.setScale(baseScale);
+    // Springy squash: horizontal stretch, vertical squash, then snap back.
+    tw.add({
+      targets: this.bubbleImg,
+      scaleX: baseScale * 1.18,
+      scaleY: baseScale * 0.82,
+      duration: 110,
+      yoyo: true,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        if (this.bubbleImg && this.bubbleImg.scene) this.bubbleImg.setScale(baseScale);
+      }
+    });
+    // Sparkle pop above the tile
+    if (this.scene.sparkles) {
+      this.scene.sparkles.explode(10, this.container.x, this.container.y - 12);
+    }
   }
 
   draw() {
@@ -1351,6 +1545,7 @@ class PlatformManager {
         if (p.container.scene) {
           tw.killTweensOf(p.container);
           if (p.bubbleImg) tw.killTweensOf(p.bubbleImg);
+          if (p._discoFlashEvt) { p._discoFlashEvt.remove(false); p._discoFlashEvt = null; }
           p.container.destroy();
         }
         return false;
@@ -1388,6 +1583,10 @@ class PlatformManager {
       }
       return true;
     });
+  }
+
+  setDiscoStyle(on) {
+    this.platforms.forEach(p => { try { p.applyDiscoStyle && p.applyDiscoStyle(on); } catch (e) {} });
   }
 
   setDifficulty(elapsed) {
@@ -1582,7 +1781,12 @@ class MenuScene extends Phaser.Scene {
     // Buttons
     this._mkButton(w / 2, h * 0.74, 'PLAY', COLORS.green, () => {
       AUDIO.init(); AUDIO.resume();
-      AUDIO.playClick();
+      // Phaser's WebAudio sound manager needs an unlock from a user gesture
+      try { if (this.sound && this.sound.unlock) this.sound.unlock(); } catch (e) {}
+      // Anime-ahh clip on the PLAY click (loaded as 'star' in BootScene)
+      if (!AUDIO.muted) {
+        try { this.sound.play('star', { volume: 0.9 }); } catch (e) {}
+      }
       this.cameras.main.fadeOut(280, 255, 245, 220);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Difficulty'));
     });
@@ -1605,7 +1809,9 @@ class MenuScene extends Phaser.Scene {
 
     // best line
     const p = loadProgress();
-    this.add.text(w / 2, h * 0.05, `BEST  ${Math.floor(p.bestHeight)}m   COMBO  x${p.bestCombo}`, {
+    const rankPart = (typeof p.bestRank === 'number' && p.bestRank >= 0 && ACHIEVEMENTS[p.bestRank])
+      ? `   RANK  ${ACHIEVEMENTS[p.bestRank].rank}` : '';
+    this.add.text(w / 2, h * 0.05, `BEST  ${Math.floor(p.bestHeight)}m   COMBO  x${p.bestCombo}${rankPart}`, {
       fontFamily: 'Fredoka, sans-serif', fontSize: '14px',
       color: '#2a2440', fontStyle: '600'
     }).setOrigin(0.5).setDepth(10).setAlpha(0.9);
@@ -1725,6 +1931,8 @@ class GameScene extends Phaser.Scene {
     this.paused = false;
     this.gameStartTime = this.time.now;
     this.score = 0;
+    // Index of the last achievement unlocked this run (-1 = none yet).
+    this._achievementIdx = -1;
     this.height = 0;
     this.combo = 0;
     this.bestCombo = 0;
@@ -1831,6 +2039,7 @@ class GameScene extends Phaser.Scene {
     this.queuedAuto = false;
     this.player.setDiscoMode(this.discoMode);
     applyDiscoToBackground(this.bg, this.discoMode);
+    if (this.platformManager) this.platformManager.setDiscoStyle(this.discoMode);
 
     // Disco overlays (always present; alpha controlled by mode)
     this._buildDiscoLayer();
@@ -1919,19 +2128,53 @@ class GameScene extends Phaser.Scene {
 
     // Pause overlay
     this.pauseOverlay = this.add.container(w / 2, this.scale.height / 2).setScrollFactor(0).setDepth(300);
-    const pbg = this.add.rectangle(0, 0, w, this.scale.height, 0x000000, 0.6);
-    const pTitle = this.add.text(0, -40, 'PAUSED', {
+    const pbg = this.add.rectangle(0, 0, w, this.scale.height, 0x000000, 0.62);
+    const pTitle = this.add.text(0, -90, 'PAUSED', {
       fontFamily: 'Fredoka, sans-serif', fontSize: '48px',
       color: '#fff4d8', fontStyle: '700'
     }).setOrigin(0.5);
-    const pHint = this.add.text(0, 20, 'tap to resume', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '16px',
+    const pHint = this.add.text(0, -30, 'tap dark area to resume', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '14px',
       color: '#fff4d8', fontStyle: '600'
+    }).setOrigin(0.5).setAlpha(0.85);
+
+    // QUIT button (exits the run, saves best, returns to menu)
+    const quitBw = 200, quitBh = 50;
+    const quitBg = this.add.graphics();
+    const drawQuit = (offset = 0) => {
+      quitBg.clear();
+      quitBg.fillStyle(0x2a2440, 1);
+      quitBg.fillRoundedRect(-quitBw / 2, -quitBh / 2 + 5 - offset + 50, quitBw, quitBh, 12);
+      quitBg.fillStyle(0xff7aa8, 1);
+      quitBg.fillRoundedRect(-quitBw / 2, -quitBh / 2 - offset + 50, quitBw, quitBh, 12);
+      quitBg.lineStyle(3, 0x2a2440, 1);
+      quitBg.strokeRoundedRect(-quitBw / 2, -quitBh / 2 - offset + 50, quitBw, quitBh, 12);
+    };
+    drawQuit();
+    const quitTxt = this.add.text(0, 50, 'QUIT TO MENU', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
+      color: '#2a2440', fontStyle: '700'
     }).setOrigin(0.5);
-    this.pauseOverlay.add([pbg, pTitle, pHint]);
+    const quitHit = this.add.zone(0, 50, quitBw + 12, quitBh + 12);
+    quitHit.on('pointerover', () => { if (this.paused) drawQuit(2); });
+    quitHit.on('pointerout',  () => { if (this.paused) drawQuit(0); });
+    quitHit.on('pointerdown', () => { if (this.paused) { drawQuit(-3); quitTxt.y = 51; } });
+    quitHit.on('pointerup',   () => {
+      if (!this.paused) return;
+      drawQuit(0); quitTxt.y = 50;
+      this._quitToMenu();
+    });
+
+    this.pauseOverlay.add([pbg, pTitle, pHint, quitBg, quitTxt, quitHit]);
     this.pauseOverlay.setVisible(false);
-    pbg.setInteractive();
-    pbg.on('pointerdown', () => this._togglePause());
+    // Resume on dark-area tap. Both interactives are disabled until paused.
+    pbg.on('pointerdown', () => {
+      if (!this.paused) return;
+      this._togglePause();
+    });
+
+    // Save handles so _togglePause can enable/disable input on them
+    this._pauseHits = { pbg, quitHit };
 
     // ---- DISCO toggle (bottom-right) ----
     this._buildRhythmToggle();
@@ -1995,6 +2238,7 @@ class GameScene extends Phaser.Scene {
       draw();
       eqBars.forEach(b => b.setVisible(this.discoMode));
       if (this.player) this.player.setDiscoMode(this.discoMode);
+      if (this.platformManager) this.platformManager.setDiscoStyle(this.discoMode);
       applyDiscoToBackground(this.bg, this.discoMode);
       if (this.uiHeight) this.uiHeight.setStroke(this.discoMode ? '#ff6bd6' : '#fff4d8', 4);
       if (this.uiCombo) this.uiCombo.setStroke(this.discoMode ? '#b582ff' : '#fff4d8', 4);
@@ -2040,7 +2284,7 @@ class GameScene extends Phaser.Scene {
       bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 11);
       bg.lineStyle(2.2, 0x2a2440, 1);
       bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 11);
-      txt.setText(on ? 'MUSIC: ON' : 'MUSIC: OFF');
+      txt.setText(on ? 'SOUND: ON' : 'SOUND: OFF');
     };
     draw();
     const hit = this.add.zone(0, 0, bw + 10, bh + 10).setInteractive({ useHandCursor: true });
@@ -2169,6 +2413,83 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  _triggerAchievement(ach) {
+    const w = this.scale.width, h = this.scale.height;
+    const c = this.add.container(w / 2, h * 0.45).setScrollFactor(0).setDepth(450);
+
+    // Outer halo glow ring
+    const halo = this.add.graphics();
+    for (let i = 6; i >= 1; i--) {
+      halo.fillStyle(ach.color, 0.05 + i * 0.04);
+      halo.fillCircle(0, 0, 70 + i * 10);
+    }
+    c.add(halo);
+
+    // Medal disc
+    const disc = this.add.graphics();
+    disc.fillStyle(0x2a2440, 1);
+    disc.fillCircle(0, 6, 64);
+    disc.fillStyle(ach.color, 1);
+    disc.fillCircle(0, 0, 64);
+    disc.lineStyle(4, 0x2a2440, 1);
+    disc.strokeCircle(0, 0, 64);
+    // inner ring
+    disc.lineStyle(2, 0xffffff, 0.55);
+    disc.strokeCircle(0, 0, 56);
+    c.add(disc);
+
+    // Rank letter
+    const letter = this.add.text(0, 0, ach.rank, {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '78px',
+      color: '#2a2440', fontStyle: '700'
+    }).setOrigin(0.5);
+    letter.setStroke('#fff4d8', 6);
+    c.add(letter);
+
+    // ACHIEVEMENT label above
+    const aboveLbl = this.add.text(0, -100, 'ACHIEVEMENT UNLOCKED', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '14px',
+      color: '#fff4d8', fontStyle: '700'
+    }).setOrigin(0.5);
+    aboveLbl.setStroke('#2a2440', 4);
+    c.add(aboveLbl);
+
+    // Tagline below
+    const tag = this.add.text(0, 90, ach.tag + '  ' + ach.meters + 'm', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
+      color: ach.hex, fontStyle: '700'
+    }).setOrigin(0.5);
+    tag.setStroke('#2a2440', 4);
+    c.add(tag);
+
+    // Quick sparkle burst behind it
+    if (this.sparkles) this.sparkles.explode(24, w / 2, h * 0.45);
+    AUDIO.playCheer();
+    this.cameras.main.flash(180, 255, 240, 200);
+    this.cameras.main.shake(140, 0.004);
+
+    // Animate in: scale-up + bounce, hold, then fade out and destroy.
+    c.setScale(0.4);
+    c.setAlpha(0);
+    this.tweens.add({
+      targets: c, alpha: 1, scale: 1, duration: 320, ease: 'Back.easeOut'
+    });
+    this.tweens.add({
+      targets: c, alpha: 0, duration: 350, delay: 1700, ease: 'Cubic.easeIn',
+      onComplete: () => { if (c && c.scene) c.destroy(); }
+    });
+
+    // Save the best rank reached (if this run beats the persisted best).
+    try {
+      const p = loadProgress();
+      const cur = (typeof p.bestRank === 'number') ? p.bestRank : -1;
+      if (this._achievementIdx > cur) {
+        p.bestRank = this._achievementIdx;
+        saveProgress(p);
+      }
+    } catch (e) {}
+  }
+
   _showHype(text) {
     if (!this.hypeText) return;
     this.hypeText.setText(text);
@@ -2210,11 +2531,48 @@ class GameScene extends Phaser.Scene {
       this.tweens.pauseAll();
       this.beat.event && (this.beat.event.paused = true);
       this.pauseOverlay.setVisible(true);
+      // Only let the overlay receive clicks while we're paused
+      if (this._pauseHits) {
+        this._pauseHits.pbg.setInteractive();
+        this._pauseHits.quitHit.setInteractive({ useHandCursor: true });
+      }
     } else {
       this.tweens.resumeAll();
       this.beat.event && (this.beat.event.paused = false);
       this.pauseOverlay.setVisible(false);
+      // Disable overlay input so it can't eat in-game clicks
+      if (this._pauseHits) {
+        this._pauseHits.pbg.disableInteractive();
+        this._pauseHits.quitHit.disableInteractive();
+      }
     }
+  }
+
+  _quitToMenu() {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    AUDIO.playClick();
+    AUDIO.stopBeatLoop();
+    if (this.beat) this.beat.stop();
+
+    // Save current best so the run isn't wasted
+    const finalHeight = Math.floor((this.height || 0) / 10);
+    const progress = loadProgress();
+    let bestHeight = progress.bestHeight || 0;
+    let bestCombo = progress.bestCombo || 0;
+    if (finalHeight > bestHeight) bestHeight = finalHeight;
+    if ((this.bestCombo || 0) > bestCombo) bestCombo = this.bestCombo;
+    saveProgress(Object.assign(progress, { bestHeight, bestCombo, muted: AUDIO.muted }));
+
+    // make sure the world isn't frozen by pause when we leave
+    if (this.paused) {
+      this.tweens.resumeAll();
+      this.paused = false;
+    }
+    if (this.pauseOverlay) this.pauseOverlay.setVisible(false);
+
+    this.cameras.main.fadeOut(280, 255, 245, 220);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Menu'));
   }
 
   _onBeat() {
@@ -2271,8 +2629,19 @@ class GameScene extends Phaser.Scene {
       s = Math.max(s, 1.0);
       this.giantJumpsLeft--;
     }
+    // Light up the disco tile we're jumping off
+    if (this.discoMode && this.player.lastPlatform && this.player.lastPlatform.flashDisco) {
+      this.player.lastPlatform.flashDisco();
+    }
     this.player.performJump(s, onBeat);
-    AUDIO.playBoing(s);
+    // Pick exactly one jump voice: long-jump clip on strong charge, otherwise
+    // the regular jump tone. They never overlap.
+    if (!AUDIO.muted) {
+      try {
+        if (s >= 0.7) this.sound.play('longjump', { volume: 0.85 });
+        else this.sound.play('jump', { volume: 0.75 });
+      } catch (e) {}
+    }
   }
 
   _executeJump(strength, onBeat) {
@@ -2329,7 +2698,7 @@ class GameScene extends Phaser.Scene {
       this._addFloat(this.player.x, this.player.y - 40, 'YUM', '#a4631a');
     }
 
-    // If a charged jump was queued during fall, fire it now
+    // If a charged jump was queued during fall, fire it now (boosted bounce).
     if (this.chargedJumpQueued && (this.time.now - this.queuedAt) < 1200) {
       const s = this.queuedStrength * p.bounceMultiplier();
       if (this.queuedAuto) this._doJump(s, this.queuedOnBeat);
@@ -2337,7 +2706,7 @@ class GameScene extends Phaser.Scene {
       this.chargedJumpQueued = false;
       this.queuedAuto = false;
     }
-    // Otherwise the player rests on the platform until they tap
+    // Otherwise the player rests on the platform until they tap.
   }
 
   update(time, dtMs) {
@@ -2408,11 +2777,16 @@ class GameScene extends Phaser.Scene {
     // collision: only detect downward against platform tops
     if (this.player.vy >= 0) {
       let landed = false;
+      const viewportBottom = this.cameras.main.scrollY + GAME_H;
       for (let i = 0; i < this.platformManager.platforms.length; i++) {
         const p = this.platformManager.platforms[i];
         if (!p.alive || p.broken) continue;
         const px = p.container.x;
         const py = p.container.y;
+        // ignore platforms that have scrolled below the visible area — they
+        // shouldn't be able to "rescue" the player after they've already fallen
+        // off screen.
+        if (py - p.height / 2 > viewportBottom) continue;
         const halfW = p.width / 2;
         const platTop = py - p.height / 2;
         if (this.player.y > platTop - 30 && this.player.y < platTop + 12) {
@@ -2433,9 +2807,23 @@ class GameScene extends Phaser.Scene {
       this.player.onGround = false;
     }
 
+    // capture platform positions BEFORE they drift this frame so we can
+    // measure how far each one moved and ride the platform horizontally.
+    for (const p of this.platformManager.platforms) p._prevX = p.x;
+
     // update platforms
     const beatProgress = this.beat.beatProgress();
     for (const p of this.platformManager.platforms) p.update(time, dtMs, beatProgress);
+
+    // Ride the platform: if standing on a drifting platform, move with it
+    // so it can't drift out from under us.
+    if (this.player.onGround && this.player.lastPlatform && this.player.lastPlatform.alive) {
+      const lp = this.player.lastPlatform;
+      const dx = lp.x - (lp._prevX !== undefined ? lp._prevX : lp.x);
+      if (dx !== 0) {
+        this.player.x = Phaser.Math.Clamp(this.player.x + dx, 30, GAME_W - 30);
+      }
+    }
 
     // update obstacles
     for (const o of this.platformManager.obstacles) {
@@ -2509,6 +2897,13 @@ class GameScene extends Phaser.Scene {
       this.maxClimb = climb;
       this.score += 0; // height handled separately
       this._refreshUI();
+      // Achievement check: trigger the next rank when its meter threshold is hit.
+      const meters = Math.floor(this.height / 10);
+      const next = this._achievementIdx + 1;
+      if (next < ACHIEVEMENTS.length && meters >= ACHIEVEMENTS[next].meters) {
+        this._achievementIdx = next;
+        this._triggerAchievement(ACHIEVEMENTS[next]);
+      }
     }
 
     // ensure platforms above
@@ -2519,6 +2914,9 @@ class GameScene extends Phaser.Scene {
     // difficulty
     const elapsed = (time - this.gameStartTime) / 1000;
     this.platformManager.setDifficulty(elapsed);
+
+    // disco floor: animate tint on every pencil platform so colors flow
+    if (this.discoMode) this._updateDiscoTints(time);
 
     // hold meter
     this._drawHoldMeter();
@@ -2549,9 +2947,29 @@ class GameScene extends Phaser.Scene {
       );
     }
 
-    // game over check
-    if (this.player.y > this.cameras.main.scrollY + GAME_H + 80) {
+    // game over check — fire as soon as the player exits the visible bottom.
+    // Also cancel any pending charged jump so a late tap can't "rescue" them.
+    if (this.player.y > this.cameras.main.scrollY + GAME_H + 10) {
+      this.chargedJumpQueued = false;
+      this.queuedAuto = false;
       this._endGame();
+    }
+  }
+
+  _updateDiscoTints(time) {
+    const t = time * 0.001;
+    const pms = this.platformManager.platforms;
+    for (let i = 0; i < pms.length; i++) {
+      const p = pms[i];
+      if (p.type !== 'pencil' || !p.bubbleImg || !p.bubbleImg.scene) continue;
+      const phase = p._discoPhase || 0;
+      // hue rotates over time, with per-corner offsets so the gradient travels
+      const hueBase = (t * 0.18 + phase * 0.16);
+      const c1 = hsvHex(hueBase + 0.00, 0.85, 1.0);
+      const c2 = hsvHex(hueBase + 0.18, 0.85, 1.0);
+      const c3 = hsvHex(hueBase + 0.10, 0.85, 1.0);
+      const c4 = hsvHex(hueBase + 0.30, 0.85, 1.0);
+      p.bubbleImg.setTint(c1, c2, c4, c3);
     }
   }
 
@@ -2650,7 +3068,10 @@ class GameScene extends Phaser.Scene {
     if (this.gameOver) return;
     this.gameOver = true;
     AUDIO.stopBeatLoop();
-    AUDIO.playBuzz();
+    // Game-over voice clip (respects the global sound toggle)
+    if (!AUDIO.muted) {
+      try { this.sound.play('fail', { volume: 0.85 }); } catch (e) {}
+    }
     this.beat.stop();
     this.player.dead = true;
     this.player.setMood('scream');
