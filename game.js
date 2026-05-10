@@ -1971,6 +1971,11 @@ class PlatformManager {
 class DifficultyScene extends Phaser.Scene {
   constructor() { super('Difficulty'); }
   create() {
+    console.log('[difficulty] Scene create');
+    // Strip any stale camera listeners from a prior scene's pending fade so
+    // a leftover handler can't fire on this scene and force an unintended
+    // scene.start back to Menu.
+    try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     // Live disco preview: starts from saved value, mutates as user toggles.
     this._disco = !!loadProgress().autoRhythm;
@@ -2039,8 +2044,19 @@ class DifficultyScene extends Phaser.Scene {
       if (this._started) return;
       this._started = true;
       AUDIO.playClick();
-      this.cameras.main.fadeOut(220, 255, 245, 220);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Menu'));
+      console.log('[difficulty] Back clicked');
+      let _navStarted = false;
+      const _go = () => {
+        if (_navStarted) return;
+        _navStarted = true;
+        try { this.scene.start('Menu'); }
+        catch (e) { console.error('[difficulty] scene.start(Menu) failed', e); }
+      };
+      try {
+        this.cameras.main.fadeOut(220, 255, 245, 220);
+        this.cameras.main.once('camerafadeoutcomplete', _go);
+      } catch (e) {}
+      try { this.time.delayedCall(300, _go); } catch (e) { _go(); }
     });
 
     // ESC also goes back
@@ -2055,12 +2071,43 @@ class DifficultyScene extends Phaser.Scene {
     if (this._started) return;
     this._started = true;
     AUDIO.playClick();
+    console.log('[difficulty] Selected:', diffKey,
+      '| Active scenes:', this.scene.manager.getScenes(true).map(s => s.scene.key));
     const p = loadProgress();
     p.lastDifficulty = diffKey;
     p.autoRhythm = this._disco;
     saveProgress(p);
-    this.cameras.main.fadeOut(260, 255, 245, 220);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Game', { difficulty: diffKey }));
+    // Backup timer mirrors GameOverScene.safeStart: guarantees Game launches
+    // even if camerafadeoutcomplete is dropped. Without this, the second
+    // play-through can hang on the fade-out and (in rare cases combined
+    // with a leaked camera listener) bounce the player back to the menu.
+    let _navStarted = false;
+    const _go = () => {
+      if (_navStarted) return;
+      _navStarted = true;
+      console.log('[difficulty] Recreating Game scene (diff=' + diffKey + ')');
+      // Hard reset: tear down and re-register the Game scene so each
+      // play-through starts from a brand-new instance with zero leaked
+      // state from a prior run (timers, tweens, listeners, sound refs,
+      // particle emitters, etc.). This is the bulletproof replay-loop fix.
+      try {
+        const sm = this.scene.manager;
+        if (sm.getScene('Game')) {
+          try { sm.stop('Game'); } catch (e) {}
+          try { sm.remove('Game'); } catch (e) {}
+        }
+        sm.add('Game', GameScene, false);
+        this.scene.start('Game', { difficulty: diffKey });
+      } catch (e) {
+        console.error('[difficulty] Game scene recreate failed', e);
+        try { this.scene.start('Menu'); } catch (_) {}
+      }
+    };
+    try {
+      this.cameras.main.fadeOut(260, 255, 245, 220);
+      this.cameras.main.once('camerafadeoutcomplete', _go);
+    } catch (e) {}
+    try { this.time.delayedCall(340, _go); } catch (e) { _go(); }
   }
 
   _mkDiscoToggle(x, y) {
@@ -2206,6 +2253,12 @@ class DifficultyScene extends Phaser.Scene {
 class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
   create() {
+    console.log('[menu] Scene create');
+    // Strip any stale camera listeners that may have leaked from a prior
+    // scene's pending fade callback. Without this, a leftover
+    // camerafadeoutcomplete handler can fire on this scene and trigger an
+    // unintended scene.start, sending the player to the wrong place.
+    try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     this._bg = buildSkyBackground(this);
 
@@ -2305,6 +2358,8 @@ class MenuScene extends Phaser.Scene {
     this._mkButton(w / 2, h * 0.71, 'PLAY', COLORS.green, () => {
       if (this._navigating) return;
       this._navigating = true;
+      console.log('[menu] Play clicked',
+        '| Active scenes:', this.scene.manager.getScenes(true).map(s => s.scene.key));
       AUDIO.init(); AUDIO.resume();
       // Phaser's WebAudio sound manager needs an unlock from a user gesture
       try { if (this.sound && this.sound.unlock) this.sound.unlock(); } catch (e) {}
@@ -2324,8 +2379,21 @@ class MenuScene extends Phaser.Scene {
         const playKey = this._discoOn ? 'star' : 'playNormal';
         try { this.sound.play(playKey, { volume: 0.9 }); } catch (e) {}
       }
-      this.cameras.main.fadeOut(280, 255, 245, 220);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Difficulty'));
+      // Backup timer mirrors GameOverScene.safeStart: guarantees the scene
+      // swap fires even if camerafadeoutcomplete is dropped (mobile browsers
+      // occasionally do this) so the menu can never freeze on PLAY.
+      let _navStarted = false;
+      const _go = () => {
+        if (_navStarted) return;
+        _navStarted = true;
+        try { this.scene.start('Difficulty'); }
+        catch (e) { console.error('[menu] scene.start(Difficulty) failed', e); }
+      };
+      try {
+        this.cameras.main.fadeOut(280, 255, 245, 220);
+        this.cameras.main.once('camerafadeoutcomplete', _go);
+      } catch (e) {}
+      try { this.time.delayedCall(360, _go); } catch (e) { _go(); }
     });
     this._mkButton(w / 2, h * 0.81, 'HOW TO PLAY', COLORS.blue, () => {
       if (this._navigating) return;
@@ -2605,8 +2673,17 @@ class HowToPlayScene extends Phaser.Scene {
 // =================================================================
 // GameScene
 // =================================================================
+// Module-level counter so we can SEE in the console whether each replay
+// genuinely creates a fresh GameScene instance or reuses a leaked one.
+let _gameSceneInstanceCount = 0;
+
 class GameScene extends Phaser.Scene {
-  constructor() { super('Game'); }
+  constructor() {
+    super('Game');
+    _gameSceneInstanceCount++;
+    this._instanceId = _gameSceneInstanceCount;
+    console.log('[gamescene] Constructed instance #' + this._instanceId);
+  }
 
   init(data) {
     const fromData = data && data.difficulty;
@@ -2618,11 +2695,16 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
+    console.log('[gamescene] Scene create (diff=' + this.difficulty + ')');
+    // Strip any stale camera listeners from a prior scene's pending fade so
+    // a leftover camerafadeoutcomplete handler can't trigger an unintended
+    // scene.start call here.
+    try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
     try {
       this._createInner();
       console.log('[gamescene] Create complete (disco=' + !!this.discoMode + ', diff=' + this.difficulty + ')');
     } catch (e) {
-      console.error('[gamescene] create() crashed — falling back to Menu', e);
+      console.error('[gamescene] UNEXPECTED REDIRECT — create() crashed, falling back to Menu', e);
       try { this.scene.start('Menu'); } catch (_) {}
     }
   }
@@ -2811,63 +2893,79 @@ class GameScene extends Phaser.Scene {
     // seconds while the player gets ready. Skipped on subsequent runs.
     this._maybeShowLoreIntro();
 
-    // Hard cleanup on scene shutdown to prevent leaks across restarts
+    // Hard cleanup on scene shutdown to prevent leaks across restarts.
+    // EACH step is independently try/caught so one failing teardown can't
+    // skip the steps that come after it (which is how leaks accumulate).
     this.events.once('shutdown', () => {
+      console.log('[gamescene] Shutdown #' + this._instanceId + ' — running cleanup');
+      try { if (this.beat) this.beat.stop(); } catch (e) { console.warn('[shutdown] beat.stop', e); }
+      try { AUDIO.stopBeatLoop && AUDIO.stopBeatLoop(); } catch (e) {}
+      try { this.tweens.killAll(); } catch (e) { console.warn('[shutdown] tweens.killAll', e); }
+      try { this.time.removeAllEvents(); } catch (e) { console.warn('[shutdown] time.removeAllEvents', e); }
       try {
-        if (this.beat) this.beat.stop();
-        AUDIO.stopBeatLoop && AUDIO.stopBeatLoop();
-        this.tweens.killAll();
-        this.time.removeAllEvents();
         if (this._winUpHandler) {
           window.removeEventListener('pointerup', this._winUpHandler);
           window.removeEventListener('blur', this._winUpHandler);
+          this._winUpHandler = null;
         }
+      } catch (e) { console.warn('[shutdown] window listeners', e); }
+      try {
         if (this._floats) {
-          this._floats.forEach(f => f.text && f.text.scene && f.text.destroy());
+          this._floats.forEach(f => { try { f.text && f.text.scene && f.text.destroy(); } catch (_) {} });
           this._floats.length = 0;
         }
-        // Stop and release looped music so it doesn't leak to the next
-        // scene or duplicate on the next run.
+      } catch (e) {}
+      // Stop and release looped music so it doesn't leak to the next
+      // scene or duplicate on the next run.
+      try {
         if (this._discoSound) {
           try { this._discoSound.stop(); } catch (e) {}
           try { this._discoSound.destroy(); } catch (e) {}
           this._discoSound = null;
         }
+      } catch (e) {}
+      try {
         if (this._normalSound) {
           try { this._normalSound.stop(); } catch (e) {}
           try { this._normalSound.destroy(); } catch (e) {}
           this._normalSound = null;
         }
+      } catch (e) {}
+      try {
         if (this._foodActive) {
-          try {
-            this.tweens.killTweensOf(this._foodActive.container);
-            this._foodActive.container.list.forEach(ch => this.tweens.killTweensOf(ch));
-            this._foodActive.container.destroy();
-          } catch (e) {}
+          try { this.tweens.killTweensOf(this._foodActive.container); } catch (_) {}
+          try { this._foodActive.container.list.forEach(ch => this.tweens.killTweensOf(ch)); } catch (_) {}
+          try { this._foodActive.container.destroy(); } catch (_) {}
           this._foodActive = null;
         }
+      } catch (e) {}
+      try {
         if (this._partyItem) {
-          try {
-            this.tweens.killTweensOf(this._partyItem.container);
-            this._partyItem.container.list.forEach(ch => this.tweens.killTweensOf(ch));
-            this._partyItem.container.destroy();
-          } catch (e) {}
+          try { this.tweens.killTweensOf(this._partyItem.container); } catch (_) {}
+          try { this._partyItem.container.list.forEach(ch => this.tweens.killTweensOf(ch)); } catch (_) {}
+          try { this._partyItem.container.destroy(); } catch (_) {}
           this._partyItem = null;
         }
-        // Pause UI lifecycle: destroy every interactive zone, drop refs,
-        // clear lock latches so the next create() starts truly fresh.
+      } catch (e) {}
+      // Pause UI lifecycle: destroy every interactive zone, drop refs,
+      // clear lock latches so the next create() starts truly fresh.
+      try {
         if (this._pauseObjs) {
           this._pauseObjs.forEach(o => {
-            try { if (o.disableInteractive) o.disableInteractive(); } catch (e) {}
-            try { if (o.removeAllListeners) o.removeAllListeners(); } catch (e) {}
-            try { if (o.destroy) o.destroy(); } catch (e) {}
+            try { if (o.disableInteractive) o.disableInteractive(); } catch (_) {}
+            try { if (o.removeAllListeners) o.removeAllListeners(); } catch (_) {}
+            try { if (o.destroy) o.destroy(); } catch (_) {}
           });
           this._pauseObjs = null;
         }
-        this._quittingToMenu = false;
-        this._pauseBtnLockUntil = 0;
-        console.log('[pause] Pause menu destroyed');
       } catch (e) {}
+      // Strip any camera listeners that might still be queued so they
+      // can't fire on whichever scene takes over next.
+      try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
+      try { this.cameras.main.off('camerafadeincomplete'); } catch (e) {}
+      this._quittingToMenu = false;
+      this._pauseBtnLockUntil = 0;
+      console.log('[gamescene] Shutdown #' + this._instanceId + ' — cleanup complete');
     });
   }
 
@@ -4796,6 +4894,9 @@ class GameOverScene extends Phaser.Scene {
   constructor() { super('GameOver'); }
   init(data) { this.results = data; }
   create() {
+    console.log('[gameover] Scene create');
+    // Strip stale camera listeners from the previous scene's pending fade.
+    try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     const bg = buildSkyBackground(this);
     applyDiscoToBackground(bg, !!loadProgress().autoRhythm);
@@ -4861,14 +4962,28 @@ class GameOverScene extends Phaser.Scene {
     const safeStart = (sceneKey, payload) => {
       if (this._navigating) return;
       this._navigating = true;
-      console.log('[gameover] Navigating to ' + sceneKey);
+      console.log('[gameover] Navigating to ' + sceneKey,
+        '| Active scenes:', this.scene.manager.getScenes(true).map(s => s.scene.key));
       let started = false;
       const go = () => {
         if (started) return;
         started = true;
         try {
-          if (payload) this.scene.start(sceneKey, payload);
-          else this.scene.start(sceneKey);
+          // RETRY = fully re-instantiate the Game scene so no leaked
+          // state from the just-finished run can corrupt the new one.
+          if (sceneKey === 'Game') {
+            const sm = this.scene.manager;
+            if (sm.getScene('Game')) {
+              try { sm.stop('Game'); } catch (e) {}
+              try { sm.remove('Game'); } catch (e) {}
+            }
+            sm.add('Game', GameScene, false);
+            this.scene.start('Game', payload);
+          } else if (payload) {
+            this.scene.start(sceneKey, payload);
+          } else {
+            this.scene.start(sceneKey);
+          }
         } catch (e) {
           console.error('[gameover] scene.start(' + sceneKey + ') failed', e);
           try { this.scene.start('Menu'); } catch (_) {}
