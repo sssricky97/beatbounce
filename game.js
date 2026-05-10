@@ -2798,6 +2798,7 @@ class GameScene extends Phaser.Scene {
         console.log('[pause] Pause menu destroyed');
       } catch (e) {}
     });
+    console.log('[gamescene] Create complete (disco=' + !!this.discoMode + ', diff=' + this.difficulty + ')');
   }
 
   _buildUI() {
@@ -4774,15 +4775,42 @@ class GameOverScene extends Phaser.Scene {
     });
 
     const retryDiff = (r && r.difficulty) || 'medium';
+
+    // Single-fire latch so a double-tap can't queue two scene starts.
+    this._navigating = false;
+    // Wraps a scene-start in a fade-out with a backup timer + try/catch
+    // so the player can never get stuck on a black screen if the camera
+    // fade event is dropped (which mobile browsers sometimes do).
+    const safeStart = (sceneKey, payload) => {
+      if (this._navigating) return;
+      this._navigating = true;
+      console.log('[gameover] Navigating to ' + sceneKey);
+      let started = false;
+      const go = () => {
+        if (started) return;
+        started = true;
+        try {
+          if (payload) this.scene.start(sceneKey, payload);
+          else this.scene.start(sceneKey);
+        } catch (e) {
+          console.error('[gameover] scene.start(' + sceneKey + ') failed', e);
+          try { this.scene.start('Menu'); } catch (_) {}
+        }
+      };
+      try {
+        this.cameras.main.fadeOut(300, 255, 245, 220);
+        this.cameras.main.once('camerafadeoutcomplete', go);
+      } catch (e) {}
+      try { this.time.delayedCall(380, go); } catch (e) { go(); }
+    };
+
     this._mkBtn(w / 2 - 90, h * 0.88, 'RETRY', COLORS.green, () => {
       AUDIO.playClick();
-      this.cameras.main.fadeOut(300, 255, 245, 220);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Game', { difficulty: retryDiff }));
+      safeStart('Game', { difficulty: retryDiff });
     });
     this._mkBtn(w / 2 + 90, h * 0.88, 'MENU', COLORS.blue, () => {
       AUDIO.playClick();
-      this.cameras.main.fadeOut(300, 255, 245, 220);
-      this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Menu'));
+      safeStart('Menu');
     });
     console.log('[gameover] Game Over UI created');
   }
