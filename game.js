@@ -281,7 +281,7 @@ const AUDIO = new AudioManager();
 // ---------- Storage ----------
 const STORE_KEY = 'beatbouncejump:v1';
 function loadProgress() {
-  const def = { bestHeight: 0, bestCombo: 0, muted: false, autoRhythm: false, autoRhythmTutorialSeen: false, lastDifficulty: 'medium', bestRank: -1 };
+  const def = { bestHeight: 0, bestCombo: 0, muted: false, musicMuted: false, autoRhythm: false, autoRhythmTutorialSeen: false, lastDifficulty: 'medium', bestRank: -1, loreSeen: false };
   try { return Object.assign(def, JSON.parse(localStorage.getItem(STORE_KEY)) || {}); }
   catch (e) { return def; }
 }
@@ -337,6 +337,30 @@ class BootScene extends Phaser.Scene {
     this.load.audio('jump', 'sounds/jump.mp3');
     // Star/note pickup clip
     this.load.audio('star', 'sounds/star.mp3');
+    // Disco-mode background music — looped while disco is on.
+    this.load.audio('discoMusic', 'sounds/disco.mp3');
+    // Normal-mode background music — looped while disco is off.
+    this.load.audio('normalMusic', 'sounds/normal.mp3');
+    // Munch SFX — played when the character grabs a food powerup.
+    this.load.audio('munch', 'sounds/munch.mp3');
+    // Achievement-unlock voice clip — plays when a rank is reached.
+    this.load.audio('yeahboy', 'sounds/yeahboy.mp3');
+    // Quit-to-menu voice clip — plays when the QUIT button is pressed.
+    this.load.audio('quit', 'sounds/quit.mp3');
+    // Normal-mode PLAY-button voice clip (cute "ehehehe" giggle). Used
+    // only when DISCO is OFF; disco still uses the existing 'star' clip.
+    this.load.audio('playNormal', 'sounds/playNormal.mp3');
+
+    // Custom disco-mode boost item PNGs. If any file is missing or fails
+    // to decode, the spawner falls back to emoji-rendered Text items, so
+    // missing assets never break gameplay.
+    // Note: item4 was intentionally removed earlier; we skip its number
+    // and continue with 5..8.
+    [1, 2, 3, 5, 6, 7, 8].forEach(n => {
+      this.load.image(`discoItem${n}`, `images/disco/item${n}.png`);
+    });
+    // Backmost disco-mode backdrop image — sits behind everything else.
+    this.load.image('discoBackdrop', 'images/disco/crowd.png');
   }
   create() {
     // Note (music note) texture
@@ -404,6 +428,15 @@ class BootScene extends Phaser.Scene {
     // pre-generate all bubble color textures so spawning never pays the cost
     BUBBLE_PALETTE.forEach(c => ensureBubbleTexture(this, c));
     BUBBLE_PALETTE.forEach(c => ensureDiscoTileLitTexture(this, c));
+
+    // Soft fluffy cloud-puff texture used by the gameplay sky bands. Built
+    // once and reused as Image sprites to keep parallax cheap.
+    ensureCloudPuffTexture(this, 'cloudPuff', 220, 110);
+
+    // Apply persisted sound preference up-front so Phaser's loaded mp3s
+    // (jump, longjump, fail, star) are silenced from the very first scene
+    // if the user previously turned sound off.
+    AUDIO.setMuted(!!loadProgress().muted);
 
     const el = document.getElementById('loader');
     if (el) el.classList.add('hidden');
@@ -500,24 +533,115 @@ function makeDiscoBall(scene, x, y) {
   return c;
 }
 
-function applyDiscoToBackground(layers, on) {
+// Cute sleepy moon — same anchor as the sun but only visible at night.
+// Closed-arc eyes + soft smile + warm halo for that cozy bedtime feel.
+function makeMoon(scene, x, y) {
+  const c = scene.add.container(x, y);
+  c.setScrollFactor(0);
+  const g = scene.add.graphics();
+  // Soft halo
+  for (let i = 5; i >= 1; i--) {
+    g.fillStyle(0xfff0c8, 0.04 + i * 0.025);
+    g.fillCircle(0, 0, 36 + i * 8);
+  }
+  // Body
+  g.lineStyle(3, COLORS.ink, 1);
+  g.fillStyle(0xfff4d8, 1);
+  g.fillCircle(0, 0, 32);
+  g.strokeCircle(0, 0, 32);
+  // Subtle crater shading on the right edge for moonlike volume
+  g.fillStyle(0xeae0c4, 0.55);
+  g.fillCircle(10, -2, 24);
+  g.fillStyle(0xeae0c4, 0.35);
+  g.fillCircle(-8, 8, 6);
+  g.fillCircle(6, -10, 4);
+  // Sleepy closed eyes (curves)
+  g.lineStyle(2.5, COLORS.ink, 1);
+  g.beginPath();
+  g.arc(-10, -3, 5, Phaser.Math.DegToRad(200), Phaser.Math.DegToRad(340));
+  g.strokePath();
+  g.beginPath();
+  g.arc(10, -3, 5, Phaser.Math.DegToRad(200), Phaser.Math.DegToRad(340));
+  g.strokePath();
+  // Smile
+  g.beginPath();
+  g.arc(0, 6, 7, Phaser.Math.DegToRad(20), Phaser.Math.DegToRad(160));
+  g.strokePath();
+  // Cheeks
+  g.fillStyle(0xff8caa, 0.45);
+  g.fillCircle(-15, 4, 3);
+  g.fillCircle(15, 4, 3);
+  c.add(g);
+  scene.tweens.add({
+    targets: c, y: c.y + 6, yoyo: true, repeat: -1,
+    duration: 3200, ease: 'Sine.easeInOut'
+  });
+  return c;
+}
+
+function applyDiscoToBackground(layers, on, hideClouds = false) {
   if (!layers) return;
   if (layers.sun) layers.sun.setVisible(!on);
-  if (layers.discoBall) layers.discoBall.setVisible(!!on);
+  if (layers.moon) layers.moon.setVisible(!on);
+  if (layers.discoBall) {
+    layers.discoBall.setVisible(!!on);
+    // Bigger ball during gameplay disco — looks like a real club ball.
+    layers.discoBall.setScale(on ? 1.65 : 1.0);
+  }
+  // GameScene passes hideClouds=true so the dreamy cloud bands disappear
+  // and the neon party backdrop owns the screen. Menus / difficulty /
+  // game-over keep their clouds visible because they don't ship a disco
+  // backdrop of their own (hiding clouds there would just leave a bare
+  // sky gradient).
+  if (hideClouds) {
+    ['farClouds', 'midClouds', 'nearClouds', 'frontMist'].forEach(k => {
+      if (layers[k]) layers[k].setVisible(!on);
+    });
+    if (layers.paper) layers.paper.setVisible(!on);
+  }
+}
+
+// Fluffy cloud-puff texture: a cluster of soft-edged white blobs. Generated
+// once at boot and reused via Image sprites for the parallax cloud bands.
+function ensureCloudPuffTexture(scene, key, w, h) {
+  if (scene.textures.exists(key)) return;
+  const g = scene.make.graphics({ x: 0, y: 0, add: false });
+  // Soft halo so edges fade into the sky.
+  g.fillStyle(0xffffff, 0.18);
+  g.fillEllipse(w / 2, h / 2 + 4, w * 0.96, h * 0.92);
+  g.fillStyle(0xffffff, 0.32);
+  g.fillEllipse(w / 2, h / 2 + 2, w * 0.86, h * 0.78);
+  // Solid puffs — overlapping circles for a fluffy cumulus silhouette.
+  g.fillStyle(0xffffff, 0.92);
+  const cy = h / 2 + 4;
+  g.fillCircle(w * 0.20, cy + h * 0.04, h * 0.30);
+  g.fillCircle(w * 0.36, cy - h * 0.08, h * 0.36);
+  g.fillCircle(w * 0.52, cy - h * 0.12, h * 0.42);
+  g.fillCircle(w * 0.68, cy - h * 0.06, h * 0.36);
+  g.fillCircle(w * 0.80, cy + h * 0.04, h * 0.28);
+  g.fillCircle(w * 0.44, cy + h * 0.10, h * 0.26);
+  g.fillCircle(w * 0.60, cy + h * 0.12, h * 0.24);
+  // Top highlight for a touch of volume.
+  g.fillStyle(0xffffff, 1);
+  g.fillCircle(w * 0.50, cy - h * 0.18, h * 0.16);
+  g.generateTexture(key, w, h);
+  g.destroy();
 }
 
 function buildSkyBackground(scene, scrollable = true) {
   const w = scene.scale.width, h = scene.scale.height;
   const layers = {};
 
-  // Sky gradient
+  // Dreamy sky gradient — deeper blue up top fading through soft pastel
+  // blue into a warm pink-cream horizon at the bottom.
   const sky = scene.add.graphics();
   const stops = [
-    { y: 0,    c: 0xffd8a3 },
-    { y: 0.18, c: 0xffb88a },
-    { y: 0.42, c: 0xffd1c4 },
-    { y: 0.65, c: 0xb8e1ff },
-    { y: 1.0,  c: 0x87ceeb }
+    { y: 0,    c: 0x3b558f },
+    { y: 0.18, c: 0x5e7fb6 },
+    { y: 0.42, c: 0x8db1d8 },
+    { y: 0.66, c: 0xc9d8ec },
+    { y: 0.85, c: 0xf3d4cf },
+    { y: 1.0,  c: 0xfbe6c6 }
   ];
   for (let i = 0; i < stops.length - 1; i++) {
     const a = stops[i], b = stops[i + 1];
@@ -529,43 +653,114 @@ function buildSkyBackground(scene, scrollable = true) {
   sky.setScrollFactor(0);
   layers.sky = sky;
 
-  // Notebook line tile across bg
+  // Notebook line tile across bg — soft so it doesn't fight the new clouds.
   const paper = scene.add.tileSprite(w / 2, h / 2, w + 4, h + 4, 'paperline');
-  paper.setAlpha(0.5);
+  paper.setAlpha(0.22);
   paper.setScrollFactor(0);
   paper.setDepth(-180);
   layers.paper = paper;
 
-  // Sun + disco ball share a position; one is shown at a time
-  const skyAnchorX = w * 0.78, skyAnchorY = h * 0.16;
+  // Star field — invisible during day, fades in at evening/night phases.
+  // One pre-drawn Graphics with random tiny dots; alpha is animated by the
+  // GameScene phase-based redraw helper.
+  const stars = scene.add.graphics().setScrollFactor(0).setDepth(-178).setAlpha(0);
+  stars.fillStyle(0xffffff, 1);
+  for (let i = 0; i < 36; i++) {
+    const sx = Math.random() * w;
+    const sy = Math.random() * h * 0.72;
+    const sr = 0.8 + Math.random() * 1.6;
+    stars.fillCircle(sx, sy, sr);
+  }
+  layers.stars = stars;
 
-  // Smiling sun
+  // ----- Layered cloud bands (back → front) -----
+  // Each band is a Container that scrolls slowly through the world; clouds
+  // gently bob in place via a single shared yoyo tween. Sprites are pre-
+  // generated `cloudPuff` Images so the bands are cheap to render.
+  const makeCloudBand = (count, opts) => {
+    const c = scene.add.container(0, 0);
+    c.setDepth(opts.depth);
+    // Pinned to the screen so an endless climb never runs out of clouds —
+    // parallax feel comes from layered depth + slight per-cloud sway, not
+    // from camera scroll.
+    c.setScrollFactor(0, 0);
+    for (let i = 0; i < count; i++) {
+      const x = (i + 0.5 + (Math.random() - 0.5) * 0.4) * (w / count);
+      const y = opts.yMin + Math.random() * (opts.yMax - opts.yMin);
+      const s = opts.scaleMin + Math.random() * (opts.scaleMax - opts.scaleMin);
+      const cloud = scene.add.image(x, y, 'cloudPuff');
+      cloud.setScale(s);
+      cloud.setAlpha(opts.alpha);
+      if (opts.tint != null) cloud.setTint(opts.tint);
+      if (Math.random() < 0.5) cloud.setFlipX(true);
+      c.add(cloud);
+      // Soft vertical bob.
+      scene.tweens.add({
+        targets: cloud,
+        y: cloud.y + 4 + Math.random() * 5,
+        yoyo: true, repeat: -1,
+        duration: 3200 + Math.random() * 1600,
+        ease: 'Sine.easeInOut',
+        delay: Math.random() * 2000
+      });
+      // Slow horizontal sway, faster for nearer bands so the layered drift
+      // reads as parallax even though all bands are screen-pinned.
+      const swayRange = (opts.sway != null ? opts.sway : 16) * (0.7 + Math.random() * 0.6);
+      const swayDur = (opts.swayDur != null ? opts.swayDur : 9000) + Math.random() * 3000;
+      scene.tweens.add({
+        targets: cloud,
+        x: cloud.x + (Math.random() < 0.5 ? -swayRange : swayRange),
+        yoyo: true, repeat: -1,
+        duration: swayDur,
+        ease: 'Sine.easeInOut',
+        delay: Math.random() * 2000
+      });
+    }
+    return c;
+  };
+
+  // FAR — small, dim, drift slowly.
+  layers.farClouds = makeCloudBand(5, {
+    depth: -185,
+    yMin: h * 0.04, yMax: h * 0.42,
+    scaleMin: 0.55, scaleMax: 0.85,
+    alpha: 0.55, tint: 0xc7d6eb,
+    sway: 10, swayDur: 14000
+  });
+
+  // MID — bigger, soft, the main cloud silhouette.
+  layers.midClouds = makeCloudBand(6, {
+    depth: -160,
+    yMin: h * 0.10, yMax: h * 0.78,
+    scaleMin: 0.8, scaleMax: 1.25,
+    alpha: 0.82, tint: 0xffffff,
+    sway: 18, swayDur: 10000
+  });
+
+  // Sun + disco ball share a position; one is shown at a time. Sits between
+  // the far and mid bands so distant clouds gently drift behind it.
+  const skyAnchorX = w * 0.78, skyAnchorY = h * 0.16;
   const sun = scene.add.container(skyAnchorX, skyAnchorY);
   sun.setScrollFactor(0);
   sun.setDepth(-170);
   const sunGfx = scene.add.graphics();
-  // rays
   sunGfx.fillStyle(0xffe17a, 1);
   for (let i = 0; i < 12; i++) {
     const a = (i / 12) * Math.PI * 2;
     const rx = Math.cos(a) * 56, ry = Math.sin(a) * 56;
     sunGfx.fillTriangle(rx * 0.8, ry * 0.8, rx, ry, rx * 0.78 - ry * 0.08, ry * 0.78 + rx * 0.08);
   }
-  // body
   sunGfx.lineStyle(3, COLORS.ink, 1);
   sunGfx.fillStyle(COLORS.yellow, 1);
   sunGfx.fillCircle(0, 0, 38);
   sunGfx.strokeCircle(0, 0, 38);
-  // eyes
   sunGfx.fillStyle(COLORS.ink, 1);
   sunGfx.fillCircle(-12, -6, 4);
   sunGfx.fillCircle(12, -6, 4);
-  // smile
   sunGfx.lineStyle(3, COLORS.ink, 1);
   sunGfx.beginPath();
   sunGfx.arc(0, 4, 14, Phaser.Math.DegToRad(15), Phaser.Math.DegToRad(165));
   sunGfx.strokePath();
-  // cheeks
   sunGfx.fillStyle(0xff8caa, 0.7);
   sunGfx.fillCircle(-20, 6, 4);
   sunGfx.fillCircle(20, 6, 4);
@@ -573,17 +768,38 @@ function buildSkyBackground(scene, scrollable = true) {
   scene.tweens.add({ targets: sun, y: sun.y + 8, yoyo: true, repeat: -1, duration: 2400, ease: 'Sine.easeInOut' });
   layers.sun = sun;
 
-  // Disco ball (hidden by default, used in disco mode)
   layers.discoBall = makeDiscoBall(scene, skyAnchorX, skyAnchorY);
   layers.discoBall.setVisible(false);
 
-  // Floating clouds and notes that scroll with parallax
-  layers.cloudGroup = scene.add.container(0, 0);
-  layers.cloudGroup.setDepth(-150);
-  for (let i = 0; i < 3; i++) {
-    const c = makeCloud(scene, Math.random() * w, Math.random() * h, 0.7 + Math.random() * 0.5, Math.random() < 0.5);
-    layers.cloudGroup.add(c);
-  }
+  // Cute sleepy moon — sits at the same sky anchor as the sun. Alpha is
+  // controlled per-phase by the time-of-day system; starts invisible.
+  layers.moon = makeMoon(scene, skyAnchorX, skyAnchorY);
+  layers.moon.setDepth(-170);
+  layers.moon.setAlpha(0);
+
+  // NEAR — gentle warm-tinted band along the lower screen, drifts faster
+  // for the parallax illusion of soft fog blowing past.
+  layers.nearClouds = makeCloudBand(4, {
+    depth: -120,
+    yMin: h * 0.55, yMax: h * 0.95,
+    scaleMin: 1.1, scaleMax: 1.6,
+    alpha: 0.62, tint: 0xfbe6d4,
+    sway: 28, swayDur: 7000
+  });
+
+  // FRONT MIST — a very faint forward layer ABOVE platforms so the player
+  // occasionally drifts through cloud wisps. Low alpha so it never hides
+  // gameplay; sits at moderate depth to stay subtle.
+  layers.frontMist = makeCloudBand(3, {
+    depth: 110,
+    yMin: h * 0.20, yMax: h * 0.85,
+    scaleMin: 1.4, scaleMax: 2.0,
+    alpha: 0.16, tint: 0xffffff,
+    sway: 36, swayDur: 6000
+  });
+
+  // Legacy keys kept for any existing callers — empty containers, no-op.
+  layers.cloudGroup = scene.add.container(0, 0).setDepth(-150);
   layers.starGroup = scene.add.container(0, 0);
 
   return layers;
@@ -1136,6 +1352,110 @@ function hsvHex(h, s, v) {
   return ((R * 255) & 0xff) << 16 | ((G * 255) & 0xff) << 8 | ((B * 255) & 0xff);
 }
 
+// Linearly interpolate two hex colours.
+function lerpHex(a, b, t) {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff;
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff;
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  return (r << 16) | (g << 8) | bl;
+}
+
+// Time-of-day phases for the normal-mode sky. Each phase has 5 gradient
+// stops (top→bottom), per-band cloud tints, plus star and sun visibility
+// targets. Phases are interpolated by height so transitions are smooth.
+const SKY_PHASES = {
+  morning: {
+    stops:  [0xfde2c4, 0xfdc7a8, 0xffd4d3, 0xfddeb8, 0xffe6c6],
+    clouds: { far: 0xfde9d5, mid: 0xfff7e6, near: 0xffe8d6, mist: 0xfff0e0 },
+    stars: 0.0, sun: 1.0, moon: 0.0
+  },
+  day: {
+    stops:  [0x4d8fd1, 0x82b6e7, 0xa9c9e5, 0xc1d8ee, 0xeaf3fb],
+    clouds: { far: 0xc7d6eb, mid: 0xffffff, near: 0xfaf2e9, mist: 0xffffff },
+    stars: 0.0, sun: 1.0, moon: 0.0
+  },
+  evening: {
+    stops:  [0x4a3373, 0x8b4d92, 0xee8a72, 0xf4ba78, 0xfdd9ac],
+    clouds: { far: 0x8a5d8e, mid: 0xebab8d, near: 0xf4c293, mist: 0xf5cf9c },
+    stars: 0.15, sun: 0.7, moon: 0.25
+  },
+  night: {
+    stops:  [0x0c1238, 0x1d2557, 0x394782, 0x4d5b94, 0x5e6da6],
+    clouds: { far: 0x4a5680, mid: 0x6e7ba0, near: 0x8e98b2, mist: 0xa9b1c4 },
+    stars: 0.95, sun: 0.0, moon: 1.0
+  },
+  dream: {
+    stops:  [0x0c0e3a, 0x282c6a, 0x4a3a8a, 0x5a4495, 0x6c4ea0],
+    clouds: { far: 0x6a5a99, mid: 0x9c8ccb, near: 0xc4b3e0, mist: 0xd9caee },
+    stars: 1.0, sun: 0.0, moon: 0.85
+  }
+};
+// Disco-mode looping party themes — same per-phase lengths as the
+// normal-mode sky cycle (1500 m total) but recolours the neon palette,
+// disco-ball glow, side strips, equalizer, and party backdrop.
+const DISCO_THEMES = {
+  purple: {
+    bg:     0x140828,
+    accent: 0xb582ff,
+    palette: [0xff6bd6, 0xb582ff, 0xc88fff, 0xe0a3ff, 0xff7aa8, 0xa260ff]
+  },
+  blue: {
+    bg:     0x081428,
+    accent: 0x4ec3ff,
+    palette: [0x4ec3ff, 0x6dd0ff, 0x82e8ff, 0xa3e3ff, 0x82c0ff, 0x3a8fff]
+  },
+  orange: {
+    bg:     0x281408,
+    accent: 0xff9a4a,
+    palette: [0xff9a4a, 0xffb86b, 0xffd95a, 0xff7a4a, 0xffe0a3, 0xffac6b]
+  },
+  green: {
+    bg:     0x082814,
+    accent: 0x6dee72,
+    palette: [0x6dee72, 0x9adf7a, 0xa3ffac, 0x4ed05a, 0x8aff8a, 0xc0ffac]
+  }
+};
+const DISCO_THEME_NAMES   = ['purple', 'blue', 'orange', 'green'];
+const DISCO_PHASE_LENGTHS = [300, 400, 300, 500];
+const DISCO_PHASE_CUM = (function () {
+  const out = [0];
+  for (let k = 0; k < DISCO_PHASE_LENGTHS.length; k++) out.push(out[k] + DISCO_PHASE_LENGTHS[k]);
+  return out;
+})();
+const DISCO_CYCLE_METERS = DISCO_PHASE_CUM[DISCO_PHASE_CUM.length - 1];
+
+// Height-driven LOOPING progression with per-phase lengths so each phase
+// gets the right amount of "screen time". Cycle wraps back to morning so
+// climbing forever cycles through the same sky journey endlessly.
+//   Morning  0   – 300 m  (300 m)
+//   Day      300 – 700 m  (400 m)
+//   Evening  700 – 1000 m (300 m)
+//   Night    1000 – 1500 m (500 m)
+//   1500 m+  → cycle restarts at Morning
+const SKY_PHASE_NAMES   = ['morning', 'day', 'evening', 'night'];
+const SKY_PHASE_LENGTHS = [300, 400, 300, 500];
+// Cumulative cycle offsets so phase i runs from CUM[i] to CUM[i+1].
+const SKY_PHASE_CUM = (function () {
+  const out = [0];
+  for (let k = 0; k < SKY_PHASE_LENGTHS.length; k++) out.push(out[k] + SKY_PHASE_LENGTHS[k]);
+  return out;
+})();
+const SKY_CYCLE_METERS = SKY_PHASE_CUM[SKY_PHASE_CUM.length - 1];
+
+// Mix a base hex colour toward white by `amount` (0..1). Used for the soft
+// candy gradient on menu buttons.
+function lightenHex(c, amount) {
+  const r = (c >> 16) & 0xff;
+  const g = (c >> 8) & 0xff;
+  const b = c & 0xff;
+  const lr = Math.round(r + (255 - r) * amount);
+  const lg = Math.round(g + (255 - g) * amount);
+  const lb = Math.round(b + (255 - b) * amount);
+  return (lr << 16) | (lg << 8) | lb;
+}
+
 class Platform {
   constructor(scene, x, y, type, width = 110) {
     this.scene = scene;
@@ -1612,54 +1932,160 @@ class DifficultyScene extends Phaser.Scene {
   constructor() { super('Difficulty'); }
   create() {
     const w = this.scale.width, h = this.scale.height;
-    const bg = buildSkyBackground(this);
-    applyDiscoToBackground(bg, !!loadProgress().autoRhythm);
+    // Live disco preview: starts from saved value, mutates as user toggles.
+    this._disco = !!loadProgress().autoRhythm;
+    // Debounce: once a difficulty is chosen, ignore further input.
+    this._started = false;
+
+    this.bgLayers = buildSkyBackground(this);
+    applyDiscoToBackground(this.bgLayers, this._disco);
     this.cameras.main.fadeIn(280, 255, 245, 220);
 
-    // dim panel
-    this.add.rectangle(w / 2, h / 2, w, h, 0x2a2440, 0.18).setDepth(0);
+    // ---- Glassmorphism panel ----
+    const panel = this.add.container(w / 2, h / 2).setDepth(1).setAlpha(0).setScale(0.94);
+    const pw = Math.min(w - 32, 380);
+    const ph = h * 0.82;
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x2a2440, 0.22);
+    shadow.fillRoundedRect(-pw / 2, -ph / 2 + 10, pw, ph, 28);
+    panel.add(shadow);
+    const glass = this.add.graphics();
+    glass.fillStyle(0xffffff, 0.55);
+    glass.fillRoundedRect(-pw / 2, -ph / 2, pw, ph, 28);
+    glass.lineStyle(2, 0xffffff, 0.85);
+    glass.strokeRoundedRect(-pw / 2 + 1, -ph / 2 + 1, pw - 2, ph - 2, 27);
+    glass.lineStyle(1.2, 0x2a2440, 0.18);
+    glass.strokeRoundedRect(-pw / 2, -ph / 2, pw, ph, 28);
+    // soft inner highlight along the top edge
+    glass.fillStyle(0xffffff, 0.35);
+    glass.fillRoundedRect(-pw / 2 + 8, -ph / 2 + 6, pw - 16, 18, 14);
+    panel.add(glass);
+    this.tweens.add({
+      targets: panel, alpha: 1, scale: 1, duration: 320, ease: 'Back.easeOut'
+    });
 
-    const title = this.add.text(w / 2, h * 0.18, 'CHOOSE\nDIFFICULTY', {
+    const title = this.add.text(w / 2, h * 0.14, 'SELECT\nDIFFICULTY', {
       fontFamily: 'Fredoka, sans-serif',
-      fontSize: '52px',
+      fontSize: '46px',
       color: '#2a2440',
       fontStyle: '700',
       align: 'center',
       lineSpacing: -6
     }).setOrigin(0.5).setDepth(10);
-    title.setStroke('#fff4d8', 8);
-    title.setShadow(0, 5, '#0c0a18', 0, false, true);
+    title.setStroke('#fff4d8', 7);
+    title.setShadow(0, 4, '#0c0a18', 0, false, true);
     this.tweens.add({
-      targets: title, y: title.y - 5, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut'
+      targets: title, y: title.y - 4, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut'
     });
+
+    // ---- Disco mode toggle (top of modal, manual opt-in) ----
+    this._mkDiscoToggle(w / 2, h * 0.26);
 
     const last = (loadProgress().lastDifficulty) || 'medium';
 
     const opts = [
-      { key: 'easy',   y: h * 0.40, blurb: 'small gaps, gentle gravity' },
-      { key: 'medium', y: h * 0.56, blurb: 'classic balance' },
-      { key: 'hard',   y: h * 0.72, blurb: 'big gaps, fast ramp' }
+      { key: 'easy',   y: h * 0.42, blurb: 'small gaps, gentle gravity' },
+      { key: 'medium', y: h * 0.55, blurb: 'classic balance' },
+      { key: 'hard',   y: h * 0.68, blurb: 'big gaps, fast ramp' }
     ];
     opts.forEach(o => {
       const d = DIFFICULTY[o.key];
       const isLast = (o.key === last);
-      this._mkDiffButton(w / 2, o.y, d.label, d.color, o.blurb, isLast, () => {
-        AUDIO.playClick();
-        const p = loadProgress(); p.lastDifficulty = o.key; saveProgress(p);
-        this.cameras.main.fadeOut(260, 255, 245, 220);
-        this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Game', { difficulty: o.key }));
-      });
+      this._mkDiffButton(w / 2, o.y, d.label, d.color, o.blurb, isLast, () => this._startGame(o.key));
     });
 
     // BACK to menu
-    this._mkBackButton(w / 2, h * 0.90, 'BACK', () => {
+    this._mkBackButton(w / 2, h * 0.88, 'BACK', () => {
+      if (this._started) return;
+      this._started = true;
       AUDIO.playClick();
       this.cameras.main.fadeOut(220, 255, 245, 220);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Menu'));
     });
 
     // ESC also goes back
-    this.input.keyboard.once('keydown-ESC', () => this.scene.start('Menu'));
+    this.input.keyboard.once('keydown-ESC', () => {
+      if (this._started) return;
+      this._started = true;
+      this.scene.start('Menu');
+    });
+  }
+
+  _startGame(diffKey) {
+    if (this._started) return;
+    this._started = true;
+    AUDIO.playClick();
+    const p = loadProgress();
+    p.lastDifficulty = diffKey;
+    p.autoRhythm = this._disco;
+    saveProgress(p);
+    this.cameras.main.fadeOut(260, 255, 245, 220);
+    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Game', { difficulty: diffKey }));
+  }
+
+  _mkDiscoToggle(x, y) {
+    const bw = 280, bh = 52;
+    const c = this.add.container(x, y).setDepth(20);
+    const bg = this.add.graphics();
+    c.add(bg);
+    const labelTxt = this.add.text(-bw / 2 + 18, 0, 'DISCO MODE', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '18px',
+      color: '#2a2440', fontStyle: '700'
+    }).setOrigin(0, 0.5);
+    c.add(labelTxt);
+    const stateTxt = this.add.text(bw / 2 - 64, 0, '', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '14px',
+      color: '#2a2440', fontStyle: '700'
+    }).setOrigin(0.5);
+    c.add(stateTxt);
+    // pill switch on the right
+    const switchW = 44, switchH = 22;
+    const switchX = bw / 2 - 28;
+    const knob = this.add.graphics();
+    c.add(knob);
+
+    const draw = () => {
+      const on = this._disco;
+      bg.clear();
+      // shadow
+      bg.fillStyle(COLORS.ink, 1);
+      bg.fillRoundedRect(-bw / 2, -bh / 2 + 5, bw, bh, 16);
+      // body — purple glow when on, neutral when off
+      bg.fillStyle(on ? 0xb582ff : 0xfff4d8, 1);
+      bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 16);
+      bg.lineStyle(3, COLORS.ink, 1);
+      bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 16);
+      labelTxt.setColor(on ? '#fff4d8' : '#2a2440');
+      stateTxt.setColor(on ? '#fff4d8' : '#7a7390');
+      stateTxt.setText(on ? 'ON' : 'OFF');
+      // switch track
+      knob.clear();
+      knob.fillStyle(COLORS.ink, 1);
+      knob.fillRoundedRect(switchX - switchW / 2, -switchH / 2, switchW, switchH, 11);
+      knob.fillStyle(on ? 0x6deeda : 0xd8d4e8, 1);
+      knob.fillRoundedRect(switchX - switchW / 2 + 2, -switchH / 2 + 2, switchW - 4, switchH - 4, 9);
+      // knob ball
+      knob.fillStyle(0xffffff, 1);
+      knob.fillCircle(switchX + (on ? switchW / 2 - 9 : -switchW / 2 + 9), 0, 7);
+      knob.lineStyle(2, COLORS.ink, 1);
+      knob.strokeCircle(switchX + (on ? switchW / 2 - 9 : -switchW / 2 + 9), 0, 7);
+    };
+    draw();
+
+    const hit = this.add.zone(0, 0, bw, bh + 10).setInteractive({ useHandCursor: true });
+    c.add(hit);
+    hit.on('pointerover', () => this.tweens.add({ targets: c, scale: 1.03, duration: 120 }));
+    hit.on('pointerout',  () => this.tweens.add({ targets: c, scale: 1.0,  duration: 120 }));
+    hit.on('pointerup', () => {
+      if (this._started) return;
+      this._disco = !this._disco;
+      const p = loadProgress(); p.autoRhythm = this._disco; saveProgress(p);
+      AUDIO.playClick();
+      draw();
+      applyDiscoToBackground(this.bgLayers, this._disco);
+      this.tweens.add({ targets: c, scale: { from: 0.94, to: 1.0 }, duration: 180, ease: 'Back.easeOut' });
+    });
+    return c;
   }
 
   _mkDiffButton(x, y, label, color, blurb, highlight, onClick) {
@@ -1741,13 +2167,26 @@ class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
   create() {
     const w = this.scale.width, h = this.scale.height;
-    const bg = buildSkyBackground(this);
-    applyDiscoToBackground(bg, !!loadProgress().autoRhythm);
+    this._bg = buildSkyBackground(this);
+
+    // Disco backdrop preview image — hidden until DISCO MODE is on. Sits
+    // just above the dark sky gradient so cloud bands (when visible) and
+    // everything else render in front.
+    if (this.textures.exists('discoBackdrop')) {
+      this.discoBackdropImg = this.add.image(w / 2, h / 2, 'discoBackdrop')
+        .setScrollFactor(0).setDepth(-185).setVisible(false);
+      const cover = Math.max(
+        w / this.discoBackdropImg.width,
+        h / this.discoBackdropImg.height
+      );
+      this.discoBackdropImg.setScale(cover);
+      this.discoBackdropImg.setTint(0x8a78ff);
+      this.discoBackdropImg.setAlpha(0);
+    }
 
     // bouncing character demo (wears glasses if disco mode is saved on)
     this.demo = this.add.container(w / 2, h * 0.55);
     this.demoPlayer = new Player(this, 0, 0);
-    if (loadProgress().autoRhythm) this.demoPlayer.setDiscoMode(true);
     this.demo.add(this.demoPlayer.container);
     this.tweens.add({
       targets: this.demoPlayer.container,
@@ -1756,41 +2195,92 @@ class MenuScene extends Phaser.Scene {
       duration: 600, ease: 'Sine.easeInOut'
     });
     // tiny cloud under demo
-    const dc = makeCloud(this, w / 2, h * 0.62, 1.1, true);
-    dc.setDepth(45);
+    this._demoCloud = makeCloud(this, w / 2, h * 0.62, 1.1, true);
+    this._demoCloud.setDepth(45);
 
-    // Title
-    this.title = this.add.text(w / 2, h * 0.18, 'BEAT BOUNCE\nJUMP', {
+    // Title — soft, cartoon-bouncy, sits high in the screen.
+    this.title = this.add.text(w / 2, h * 0.16, 'HUGGING\nPOP', {
       fontFamily: 'Fredoka, sans-serif',
-      fontSize: '62px',
-      color: '#2a2440',
+      fontSize: '76px',
+      color: '#ff7aa8',
       fontStyle: '700',
       align: 'center',
-      lineSpacing: -8
+      lineSpacing: -10
     }).setOrigin(0.5).setDepth(10);
-    this.title.setStroke('#fff4d8', 8);
-    this.title.setShadow(0, 6, '#0c0a18', 0, false, true);
+    this.title.setStroke('#fff4d8', 10);
+    this.title.setShadow(0, 6, '#bf3a82', 0, false, true);
+    // Idle float + gentle scale-pulse instead of a wide rotation wiggle —
+    // reads as "cute breathing", not flashy.
     this.tweens.add({
       targets: this.title,
-      y: this.title.y - 6, yoyo: true, repeat: -1, duration: 1400, ease: 'Sine.easeInOut'
+      y: this.title.y - 5, yoyo: true, repeat: -1,
+      duration: 1600, ease: 'Sine.easeInOut'
     });
     this.tweens.add({
-      targets: this.title, angle: { from: -2, to: 2 }, yoyo: true, repeat: -1, duration: 2200, ease: 'Sine.easeInOut'
+      targets: this.title,
+      scale: { from: 1.0, to: 1.04 },
+      yoyo: true, repeat: -1,
+      duration: 1100, ease: 'Sine.easeInOut'
     });
 
-    // Buttons
-    this._mkButton(w / 2, h * 0.74, 'PLAY', COLORS.green, () => {
+    // Tagline — handwritten Caveat for a dreamy storybook feel. Drifts up
+    // and fades in/out softly, looping.
+    this.tagline = this.add.text(w / 2, h * 0.28, 'Every perfect jump creates a Pop of Joy', {
+      fontFamily: 'Caveat, Fredoka, sans-serif',
+      fontSize: '22px',
+      color: '#fff4d8',
+      fontStyle: '700',
+      align: 'center'
+    }).setOrigin(0.5).setDepth(10).setAlpha(0);
+    this.tagline.setStroke('#bf3a82', 4);
+    this.tagline.setShadow(0, 3, '#2a2440', 0, false, true);
+    // Loop: ease in for 900ms, hold ~1.6s, ease out 900ms, pause, repeat.
+    // Gentle vertical drift the whole time.
+    const taglineY = this.tagline.y;
+    this.tweens.add({
+      targets: this.tagline,
+      alpha: { from: 0, to: 1 },
+      duration: 900, ease: 'Sine.easeOut',
+      hold: 1600, yoyo: true, repeatDelay: 600, repeat: -1
+    });
+    this.tweens.add({
+      targets: this.tagline,
+      y: { from: taglineY + 4, to: taglineY - 4 },
+      duration: 4000, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+    });
+
+    // Single-fire navigation guard — prevents double-taps from triggering
+    // PLAY/HOW-TO-PLAY twice while the fade-out is in flight.
+    this._navigating = false;
+    // Sound-toggle debounce so rapid taps can't race the audio context.
+    this._soundLocked = false;
+
+    // ---- MODE toggle: NORMAL ☁️  ↔  DISCO 🪩 ----
+    this._mkModeToggle(w / 2, h * 0.40);
+    // Apply the initial mode (live preview) — uses progress.autoRhythm.
+    this._applyMenuMode(!!loadProgress().autoRhythm, /* instant */ true);
+
+    // Buttons — slightly taller now, so use a 10%-of-height vertical step
+    // so the candy shadows don't crowd each other.
+    this._mkButton(w / 2, h * 0.71, 'PLAY', COLORS.green, () => {
+      if (this._navigating) return;
+      this._navigating = true;
       AUDIO.init(); AUDIO.resume();
       // Phaser's WebAudio sound manager needs an unlock from a user gesture
       try { if (this.sound && this.sound.unlock) this.sound.unlock(); } catch (e) {}
-      // Anime-ahh clip on the PLAY click (loaded as 'star' in BootScene)
+      // Mode-specific PLAY voice clip:
+      //   NORMAL → cute "ehehehe" giggle (playNormal)
+      //   DISCO  → existing anime-ahh clip (star)
       if (!AUDIO.muted) {
-        try { this.sound.play('star', { volume: 0.9 }); } catch (e) {}
+        const playKey = this._discoOn ? 'star' : 'playNormal';
+        try { this.sound.play(playKey, { volume: 0.9 }); } catch (e) {}
       }
       this.cameras.main.fadeOut(280, 255, 245, 220);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Difficulty'));
     });
-    this._mkButton(w / 2, h * 0.83, 'HOW TO PLAY', COLORS.blue, () => {
+    this._mkButton(w / 2, h * 0.81, 'HOW TO PLAY', COLORS.blue, () => {
+      if (this._navigating) return;
+      this._navigating = true;
       AUDIO.init(); AUDIO.resume();
       AUDIO.playClick();
       this.scene.start('HowToPlay');
@@ -1798,7 +2288,10 @@ class MenuScene extends Phaser.Scene {
 
     const progress = loadProgress();
     AUDIO.setMuted(!!progress.muted);
-    this.muteBtn = this._mkButton(w / 2, h * 0.92, progress.muted ? 'SOUND: OFF' : 'SOUND: ON', COLORS.pink, () => {
+    this.muteBtn = this._mkButton(w / 2, h * 0.91, progress.muted ? 'SOUND: OFF' : 'SOUND: ON', COLORS.pink, () => {
+      if (this._soundLocked) return;
+      this._soundLocked = true;
+      this.time.delayedCall(180, () => { this._soundLocked = false; });
       AUDIO.init();
       const m = !AUDIO.muted;
       AUDIO.setMuted(m);
@@ -1829,35 +2322,185 @@ class MenuScene extends Phaser.Scene {
   }
 
   _mkButton(x, y, label, color, onClick) {
-    const bw = 240, bh = 56;
+    const bw = 244, bh = 64;
+    const radius = 26;
     const c = this.add.container(x, y).setDepth(20);
-    const bg = this.add.graphics();
-    const draw = (offset = 0) => {
-      bg.clear();
-      // shadow
-      bg.fillStyle(COLORS.ink, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2 + 6 - offset, bw, bh, 14);
-      // body
-      bg.fillStyle(color, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2 - offset, bw, bh, 14);
-      bg.lineStyle(3, COLORS.ink, 1);
-      bg.strokeRoundedRect(-bw / 2, -bh / 2 - offset, bw, bh, 14);
-    };
-    draw();
-    c.add(bg);
-    const txt = this.add.text(0, -2, label, {
+
+    // Soft candy shadow — pink-purple instead of harsh ink so it fits the
+    // dreamy palette around the title.
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x4a2a55, 0.32);
+    shadow.fillRoundedRect(-bw / 2 + 2, -bh / 2 + 9, bw - 4, bh, radius);
+    c.add(shadow);
+
+    // Body: gradient (light top → base bottom) + thick cream stroke
+    // matching the title's stroke for a unified language.
+    const body = this.add.graphics();
+    const lightColor = lightenHex(color, 0.36);
+    body.fillGradientStyle(lightColor, lightColor, color, color, 1);
+    body.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, radius);
+    body.lineStyle(7, 0xfff4d8, 1);
+    body.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, radius);
+    c.add(body);
+
+    // Glossy highlight strip near the top — soft white pill, low alpha.
+    const shine = this.add.graphics();
+    shine.fillStyle(0xffffff, 0.55);
+    shine.fillRoundedRect(-bw / 2 + 18, -bh / 2 + 9, bw - 36, 12, 8);
+    c.add(shine);
+
+    const txt = this.add.text(0, -1, label, {
       fontFamily: 'Fredoka, sans-serif', fontSize: '24px',
-      color: '#2a2440', fontStyle: '700'
+      color: '#3a1a4a', fontStyle: '700'
     }).setOrigin(0.5);
+    txt.setStroke('#fff4d8', 4);
     c.add(txt);
     c.label = txt;
+
+    // Idle float — subtle breathing so the buttons feel alive like the
+    // title above. Random delay so they don't bob in lockstep.
+    this.tweens.add({
+      targets: c,
+      y: c.y - 3,
+      yoyo: true, repeat: -1,
+      duration: 2200 + Math.random() * 600,
+      delay: Math.random() * 800,
+      ease: 'Sine.easeInOut'
+    });
+
     const hit = this.add.zone(0, 0, bw, bh + 12).setInteractive({ useHandCursor: true });
     c.add(hit);
-    hit.on('pointerover', () => { draw(2); this.tweens.add({ targets: c, scale: 1.04, duration: 120 }); });
-    hit.on('pointerout',  () => { draw(0); this.tweens.add({ targets: c, scale: 1.0,  duration: 120 }); });
-    hit.on('pointerdown', () => { draw(-3); txt.y = 1; });
-    hit.on('pointerup',   () => { draw(0); txt.y = -2; onClick(); });
+    hit.on('pointerover', () => {
+      this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
+      this.tweens.add({ targets: c, scaleX: 1.06, scaleY: 1.06, duration: 160, ease: 'Sine.easeOut' });
+    });
+    hit.on('pointerout', () => {
+      this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
+      this.tweens.add({ targets: c, scaleX: 1.0, scaleY: 1.0, duration: 160, ease: 'Sine.easeOut' });
+    });
+    hit.on('pointerdown', () => {
+      // Squish: wider + shorter for a candy-press feel.
+      this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
+      this.tweens.add({ targets: c, scaleX: 1.10, scaleY: 0.90, duration: 90, ease: 'Sine.easeOut' });
+    });
+    hit.on('pointerup', () => {
+      // Pop back from the squish to a slight hover overshoot.
+      this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
+      this.tweens.add({
+        targets: c,
+        scaleX: 1.06, scaleY: 1.06,
+        duration: 220, ease: 'Back.easeOut'
+      });
+      onClick();
+    });
     return c;
+  }
+
+  // Premium NORMAL ↔ DISCO toggle pill — labelled with mode + emoji and a
+  // sliding switch knob on the right. Tied to `progress.autoRhythm` and to
+  // `_applyMenuMode` so the menu re-skins live on toggle.
+  _mkModeToggle(x, y) {
+    const bw = 250, bh = 52;
+    const c = this.add.container(x, y).setDepth(20);
+
+    const shadow = this.add.graphics();
+    shadow.fillStyle(0x4a2a55, 0.30);
+    shadow.fillRoundedRect(-bw / 2 + 2, -bh / 2 + 7, bw - 4, bh, 22);
+    c.add(shadow);
+
+    const body = this.add.graphics();
+    c.add(body);
+
+    const labelTxt = this.add.text(-bw / 2 + 22, 0, '', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '15px',
+      color: '#3a1a4a', fontStyle: '700'
+    }).setOrigin(0, 0.5);
+    c.add(labelTxt);
+
+    const icon = this.add.text(-bw / 2 + 134, 0, '', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '20px'
+    }).setOrigin(0.5);
+    c.add(icon);
+
+    const sw = 44, shh = 22;
+    const sx = bw / 2 - 36;
+    const knob = this.add.graphics();
+    c.add(knob);
+
+    const draw = () => {
+      const on = !!this._discoOn;
+      const bgCol = on ? 0xb582ff : 0xfff4d8;
+      body.clear();
+      body.fillStyle(0x2a2440, 1);
+      body.fillRoundedRect(-bw / 2, -bh / 2 + 1, bw, bh, 22);
+      body.fillStyle(bgCol, 1);
+      body.fillRoundedRect(-bw / 2 + 2, -bh / 2 + 1, bw - 4, bh - 4, 21);
+      body.lineStyle(3, 0x2a2440, 1);
+      body.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 22);
+      if (on) {
+        // Neon outer glow when disco is on.
+        body.lineStyle(2, 0xff6bd6, 0.55);
+        body.strokeRoundedRect(-bw / 2 - 2, -bh / 2 - 2, bw + 4, bh + 4, 24);
+      }
+      labelTxt.setText(on ? 'DISCO MODE' : 'NORMAL MODE');
+      labelTxt.setColor(on ? '#fff4d8' : '#3a1a4a');
+      icon.setText(on ? '🪩' : '☁️');
+
+      knob.clear();
+      knob.fillStyle(0x2a2440, 1);
+      knob.fillRoundedRect(sx - sw / 2, -shh / 2, sw, shh, 11);
+      knob.fillStyle(on ? 0x6deeda : 0xd8d4e8, 1);
+      knob.fillRoundedRect(sx - sw / 2 + 2, -shh / 2 + 2, sw - 4, shh - 4, 9);
+      knob.fillStyle(0xffffff, 1);
+      knob.fillCircle(sx + (on ? sw / 2 - 9 : -sw / 2 + 9), 0, 7);
+      knob.lineStyle(2, 0x2a2440, 1);
+      knob.strokeCircle(sx + (on ? sw / 2 - 9 : -sw / 2 + 9), 0, 7);
+    };
+    this._modeToggleDraw = draw;
+    draw();
+
+    const hit = this.add.zone(0, 0, bw, bh + 8).setInteractive({ useHandCursor: true });
+    c.add(hit);
+    hit.on('pointerover', () => this.tweens.add({ targets: c, scale: 1.04, duration: 120 }));
+    hit.on('pointerout',  () => this.tweens.add({ targets: c, scale: 1.0,  duration: 120 }));
+    hit.on('pointerup', () => {
+      AUDIO.init();
+      this._applyMenuMode(!this._discoOn);
+      AUDIO.playClick();
+      this.tweens.add({ targets: c, scale: { from: 0.94, to: 1.0 }, duration: 200, ease: 'Back.easeOut' });
+    });
+    return c;
+  }
+
+  // Live menu mode swap — re-skins demo character, sky, and adds/removes
+  // the disco backdrop image with a smooth alpha cross-fade.
+  _applyMenuMode(on, instant = false) {
+    this._discoOn = !!on;
+    if (this.demoPlayer) this.demoPlayer.setDiscoMode(this._discoOn);
+    if (this._bg) applyDiscoToBackground(this._bg, this._discoOn, /* hideClouds */ true);
+    if (this._demoCloud) this._demoCloud.setVisible(!this._discoOn);
+    if (this.discoBackdropImg) {
+      const targetA = this._discoOn ? 0.55 : 0;
+      if (instant) {
+        this.discoBackdropImg.setAlpha(targetA);
+        this.discoBackdropImg.setVisible(this._discoOn);
+      } else {
+        if (this._discoOn) this.discoBackdropImg.setVisible(true);
+        this.tweens.killTweensOf(this.discoBackdropImg);
+        this.tweens.add({
+          targets: this.discoBackdropImg,
+          alpha: targetA,
+          duration: 320,
+          ease: this._discoOn ? 'Sine.easeOut' : 'Sine.easeIn',
+          onComplete: () => {
+            if (!this._discoOn) this.discoBackdropImg.setVisible(false);
+          }
+        });
+      }
+    }
+    // Persist so DifficultyScene + GameScene see the choice immediately.
+    const p = loadProgress(); p.autoRhythm = this._discoOn; saveProgress(p);
+    if (this._modeToggleDraw) this._modeToggleDraw();
   }
 }
 
@@ -1929,6 +2572,30 @@ class GameScene extends Phaser.Scene {
     const w = this.scale.width, h = this.scale.height;
     this.gameOver = false;
     this.paused = false;
+    // Reset run-scoped latches that live on `this`. Phaser reuses the same
+    // scene instance across restarts, so anything not explicitly reset here
+    // leaks from the previous run and bricks subsequent UI input.
+    this._quittingToMenu = false;
+    this._pauseBtnLockUntil = 0;
+    this._pauseObjs = null;
+    this._discoSound = null;
+    this._normalSound = null;
+    // Food powerup state — spawn rules tracked here so they reset cleanly
+    // each run. STANDARD MODE ONLY (skipped while discoMode is true).
+    this._foodActive = null;
+    this._foodMilestones = [250, 500, 1000, 1500, 2000];
+    this._foodMilestoneIdx = 0;
+    this._nextFoodHeight = this._foodMilestones[0];
+    // Time-of-day cache — null tag forces the first frame's redraw to fire.
+    this._lastSkyTag = null;
+    // Disco mode collectible (party items) — fully reset each run.
+    this._partyItem = null;
+    // First few items appear quickly so disco mode feels rewarding right
+    // away; subsequent items use a random 50–100 m gap (set below).
+    this._partyMilestones = [40, 100, 170, 240];
+    this._partyMilestoneIdx = 0;
+    this._nextPartyHeight = this._partyMilestones[0];
+    this._lastDiscoThemeTag = null;
     this.gameStartTime = this.time.now;
     this.score = 0;
     // Index of the last achievement unlocked this run (-1 = none yet).
@@ -2036,13 +2703,30 @@ class GameScene extends Phaser.Scene {
     // Auto Rhythm Mode state (loaded from progress)
     const __progress = loadProgress();
     this.discoMode = !!__progress.autoRhythm;
+    this._musicMuted = !!__progress.musicMuted;
     this.queuedAuto = false;
     this.player.setDiscoMode(this.discoMode);
-    applyDiscoToBackground(this.bg, this.discoMode);
+    applyDiscoToBackground(this.bg, this.discoMode, true);
     if (this.platformManager) this.platformManager.setDiscoStyle(this.discoMode);
+    // Kick off whichever background track matches the current mode.
+    this._syncBgMusic();
 
     // Disco overlays (always present; alpha controlled by mode)
     this._buildDiscoLayer();
+
+    // Day-phase sweat drips for the character — tiny blue puffs that fall
+    // briefly. Emits only during the daytime portion of the cycle.
+    this.sweatDrops = this.add.particles(0, 0, 'puff', {
+      lifespan: 900,
+      speed: { min: 20, max: 50 },
+      angle: { min: 80, max: 100 },
+      gravityY: 220,
+      scale: { start: 0.45, end: 0.0 },
+      alpha: { start: 0.85, end: 0 },
+      tint: 0x6dd0ff,
+      emitting: false
+    }).setDepth(55);
+    this._sweatNextMs = 0;
 
     // Floating texts
     this._floats = [];
@@ -2051,6 +2735,10 @@ class GameScene extends Phaser.Scene {
     this._buildUI();
 
     this.cameras.main.fadeIn(350, 255, 245, 220);
+
+    // First-run-only lore intro: two short lines fade in/out over a few
+    // seconds while the player gets ready. Skipped on subsequent runs.
+    this._maybeShowLoreIntro();
 
     // Hard cleanup on scene shutdown to prevent leaks across restarts
     this.events.once('shutdown', () => {
@@ -2067,6 +2755,47 @@ class GameScene extends Phaser.Scene {
           this._floats.forEach(f => f.text && f.text.scene && f.text.destroy());
           this._floats.length = 0;
         }
+        // Stop and release looped music so it doesn't leak to the next
+        // scene or duplicate on the next run.
+        if (this._discoSound) {
+          try { this._discoSound.stop(); } catch (e) {}
+          try { this._discoSound.destroy(); } catch (e) {}
+          this._discoSound = null;
+        }
+        if (this._normalSound) {
+          try { this._normalSound.stop(); } catch (e) {}
+          try { this._normalSound.destroy(); } catch (e) {}
+          this._normalSound = null;
+        }
+        if (this._foodActive) {
+          try {
+            this.tweens.killTweensOf(this._foodActive.container);
+            this._foodActive.container.list.forEach(ch => this.tweens.killTweensOf(ch));
+            this._foodActive.container.destroy();
+          } catch (e) {}
+          this._foodActive = null;
+        }
+        if (this._partyItem) {
+          try {
+            this.tweens.killTweensOf(this._partyItem.container);
+            this._partyItem.container.list.forEach(ch => this.tweens.killTweensOf(ch));
+            this._partyItem.container.destroy();
+          } catch (e) {}
+          this._partyItem = null;
+        }
+        // Pause UI lifecycle: destroy every interactive zone, drop refs,
+        // clear lock latches so the next create() starts truly fresh.
+        if (this._pauseObjs) {
+          this._pauseObjs.forEach(o => {
+            try { if (o.disableInteractive) o.disableInteractive(); } catch (e) {}
+            try { if (o.removeAllListeners) o.removeAllListeners(); } catch (e) {}
+            try { if (o.destroy) o.destroy(); } catch (e) {}
+          });
+          this._pauseObjs = null;
+        }
+        this._quittingToMenu = false;
+        this._pauseBtnLockUntil = 0;
+        console.log('[pause] Pause menu destroyed');
       } catch (e) {}
     });
   }
@@ -2126,60 +2855,18 @@ class GameScene extends Phaser.Scene {
       fontFamily: 'monospace', fontSize: '10px', color: '#2a2440', backgroundColor: '#fff4d899'
     }).setOrigin(0, 1).setScrollFactor(0).setDepth(500);
 
-    // Pause overlay
-    this.pauseOverlay = this.add.container(w / 2, this.scale.height / 2).setScrollFactor(0).setDepth(300);
-    const pbg = this.add.rectangle(0, 0, w, this.scale.height, 0x000000, 0.62);
-    const pTitle = this.add.text(0, -90, 'PAUSED', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '48px',
-      color: '#fff4d8', fontStyle: '700'
-    }).setOrigin(0.5);
-    const pHint = this.add.text(0, -30, 'tap dark area to resume', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '14px',
-      color: '#fff4d8', fontStyle: '600'
-    }).setOrigin(0.5).setAlpha(0.85);
-
-    // QUIT button (exits the run, saves best, returns to menu)
-    const quitBw = 200, quitBh = 50;
-    const quitBg = this.add.graphics();
-    const drawQuit = (offset = 0) => {
-      quitBg.clear();
-      quitBg.fillStyle(0x2a2440, 1);
-      quitBg.fillRoundedRect(-quitBw / 2, -quitBh / 2 + 5 - offset + 50, quitBw, quitBh, 12);
-      quitBg.fillStyle(0xff7aa8, 1);
-      quitBg.fillRoundedRect(-quitBw / 2, -quitBh / 2 - offset + 50, quitBw, quitBh, 12);
-      quitBg.lineStyle(3, 0x2a2440, 1);
-      quitBg.strokeRoundedRect(-quitBw / 2, -quitBh / 2 - offset + 50, quitBw, quitBh, 12);
-    };
-    drawQuit();
-    const quitTxt = this.add.text(0, 50, 'QUIT TO MENU', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
-      color: '#2a2440', fontStyle: '700'
-    }).setOrigin(0.5);
-    const quitHit = this.add.zone(0, 50, quitBw + 12, quitBh + 12);
-    quitHit.on('pointerover', () => { if (this.paused) drawQuit(2); });
-    quitHit.on('pointerout',  () => { if (this.paused) drawQuit(0); });
-    quitHit.on('pointerdown', () => { if (this.paused) { drawQuit(-3); quitTxt.y = 51; } });
-    quitHit.on('pointerup',   () => {
-      if (!this.paused) return;
-      drawQuit(0); quitTxt.y = 50;
-      this._quitToMenu();
-    });
-
-    this.pauseOverlay.add([pbg, pTitle, pHint, quitBg, quitTxt, quitHit]);
-    this.pauseOverlay.setVisible(false);
-    // Resume on dark-area tap. Both interactives are disabled until paused.
-    pbg.on('pointerdown', () => {
-      if (!this.paused) return;
-      this._togglePause();
-    });
-
-    // Save handles so _togglePause can enable/disable input on them
-    this._pauseHits = { pbg, quitHit };
+    // Pause overlay — single root container, toggled via setVisible.
+    // Visibility cascades to descendants in Phaser's input system, so
+    // interactive children won't receive events while the root is hidden.
+    this.input.topOnly = true;
+    this._buildPauseOverlay(w, this.scale.height);
 
     // ---- DISCO toggle (bottom-right) ----
     this._buildRhythmToggle();
-    // ---- MUSIC on/off toggle (above DISCO) ----
+    // ---- SOUND master toggle (top-right, next to pause) ----
     this._buildMusicToggle();
+    // ---- MUSIC-only toggle (top-right, left of SOUND) ----
+    this._buildMusicOnlyToggle();
   }
 
   _buildRhythmToggle() {
@@ -2239,7 +2926,14 @@ class GameScene extends Phaser.Scene {
       eqBars.forEach(b => b.setVisible(this.discoMode));
       if (this.player) this.player.setDiscoMode(this.discoMode);
       if (this.platformManager) this.platformManager.setDiscoStyle(this.discoMode);
-      applyDiscoToBackground(this.bg, this.discoMode);
+      applyDiscoToBackground(this.bg, this.discoMode, true);
+      // Switching back to normal mode? Force the next sky redraw to fire
+      // so the cloud world reappears at the player's current altitude.
+      if (!this.discoMode) {
+        this._lastSkyTag = null;
+        this._redrawSky(this.height / 10);
+      }
+      this._syncBgMusic();
       if (this.uiHeight) this.uiHeight.setStroke(this.discoMode ? '#ff6bd6' : '#fff4d8', 4);
       if (this.uiCombo) this.uiCombo.setStroke(this.discoMode ? '#b582ff' : '#fff4d8', 4);
       if (this.discoMode) {
@@ -2264,64 +2958,648 @@ class GameScene extends Phaser.Scene {
   }
 
   _buildMusicToggle() {
-    const w = this.scale.width, h = this.scale.height;
-    const bw = 130, bh = 30;
-    const cx = w - bw / 2 - 10;
-    const cy = h - bh / 2 - 60; // sits just above the DISCO toggle
+    const w = this.scale.width;
+    // Round icon-style button at top-right, sitting just left of the pause
+    // button. Uses 🔊 / 🔇 glyphs so the state is recognisable instantly.
+    const r = 18;
+    const cx = w - 60;
+    const cy = 50 + r;
     const c = this.add.container(cx, cy).setScrollFactor(0).setDepth(220);
     const bg = this.add.graphics();
-    const txt = this.add.text(0, 0, '', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '12px',
+    c.add(bg);
+    const icon = this.add.text(0, 1, '', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
       color: '#2a2440', fontStyle: '700'
     }).setOrigin(0.5);
-    c.add([bg, txt]);
+    c.add(icon);
+
     const draw = () => {
       const on = !AUDIO.muted;
       bg.clear();
+      // shadow
       bg.fillStyle(0x2a2440, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2 + 3, bw, bh, 11);
+      bg.fillCircle(0, 3, r);
+      // body
       bg.fillStyle(on ? 0x6deeda : 0xd8d4e8, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 11);
-      bg.lineStyle(2.2, 0x2a2440, 1);
-      bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 11);
-      txt.setText(on ? 'SOUND: ON' : 'SOUND: OFF');
+      bg.fillCircle(0, 0, r);
+      bg.lineStyle(2.5, 0x2a2440, 1);
+      bg.strokeCircle(0, 0, r);
+      icon.setText(on ? '🔊' : '🔇');
     };
     draw();
-    const hit = this.add.zone(0, 0, bw + 10, bh + 10).setInteractive({ useHandCursor: true });
+
+    const hit = this.add.zone(0, 0, r * 2 + 8, r * 2 + 8);
+    hit.setInteractive(
+      new Phaser.Geom.Rectangle(0, 0, r * 2 + 8, r * 2 + 8),
+      Phaser.Geom.Rectangle.Contains
+    );
+    if (hit.input) hit.input.cursor = 'pointer';
     c.add(hit);
-    hit.on('pointerdown', () => {
+
+    this._musicBtnLocked = false;
+    hit.on('pointerover', () => this.tweens.add({ targets: c, scale: 1.08, duration: 100 }));
+    hit.on('pointerout',  () => this.tweens.add({ targets: c, scale: 1.0,  duration: 100 }));
+    hit.on('pointerup', () => {
+      if (this._musicBtnLocked) return;
+      this._musicBtnLocked = true;
+      this.time.delayedCall(180, () => { this._musicBtnLocked = false; });
       AUDIO.init();
       AUDIO.setMuted(!AUDIO.muted);
       const p = loadProgress();
       p.muted = AUDIO.muted;
       saveProgress(p);
+      // Click sound only fires if we just turned audio ON (gated by AUDIO.muted).
       AUDIO.playClick();
+      // Re-sync the background track with the new mute state.
+      this._syncBgMusic();
       draw();
-      this.tweens.add({ targets: c, scale: { from: 0.9, to: 1.0 }, duration: 180, ease: 'Back.easeOut' });
+      this.tweens.add({ targets: c, scale: { from: 0.85, to: 1.0 }, duration: 200, ease: 'Back.easeOut' });
     });
     this.musicBtn = c;
     this.musicBtnDraw = draw;
   }
 
+  // MUSIC-only toggle. Silences the looped background tracks but leaves
+  // every SFX channel (jumps, click, cheer, food, voice clips) alone, so
+  // players can listen to their own music while still hearing reactions.
+  _buildMusicOnlyToggle() {
+    const w = this.scale.width;
+    const r = 18;
+    const cx = w - 104; // sits to the LEFT of the SOUND toggle (which is at w-60)
+    const cy = 50 + r;
+    const c = this.add.container(cx, cy).setScrollFactor(0).setDepth(220);
+    const bg = this.add.graphics();
+    c.add(bg);
+    const icon = this.add.text(0, 1, '🎵', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '18px',
+      color: '#2a2440', fontStyle: '700'
+    }).setOrigin(0.5);
+    c.add(icon);
+    // Slash drawn through the icon when music is OFF.
+    const slash = this.add.graphics();
+    c.add(slash);
+
+    const draw = () => {
+      const on = !this._musicMuted;
+      bg.clear();
+      bg.fillStyle(0x2a2440, 1);
+      bg.fillCircle(0, 3, r);
+      bg.fillStyle(on ? 0xb582ff : 0xd8d4e8, 1);
+      bg.fillCircle(0, 0, r);
+      bg.lineStyle(2.5, 0x2a2440, 1);
+      bg.strokeCircle(0, 0, r);
+      icon.setAlpha(on ? 1 : 0.55);
+      slash.clear();
+      if (!on) {
+        // Diagonal strikethrough so the OFF state reads at a glance.
+        slash.lineStyle(3, 0x2a2440, 1);
+        slash.beginPath();
+        slash.moveTo(-r * 0.65, -r * 0.65);
+        slash.lineTo( r * 0.65,  r * 0.65);
+        slash.strokePath();
+      }
+    };
+    draw();
+
+    const hit = this.add.zone(0, 0, r * 2 + 8, r * 2 + 8);
+    hit.setInteractive(
+      new Phaser.Geom.Rectangle(0, 0, r * 2 + 8, r * 2 + 8),
+      Phaser.Geom.Rectangle.Contains
+    );
+    if (hit.input) hit.input.cursor = 'pointer';
+    c.add(hit);
+
+    this._musicOnlyBtnLocked = false;
+    hit.on('pointerover', () => this.tweens.add({ targets: c, scale: 1.08, duration: 100 }));
+    hit.on('pointerout',  () => this.tweens.add({ targets: c, scale: 1.0,  duration: 100 }));
+    hit.on('pointerup', () => {
+      if (this._musicOnlyBtnLocked) return;
+      this._musicOnlyBtnLocked = true;
+      this.time.delayedCall(180, () => { this._musicOnlyBtnLocked = false; });
+      this._musicMuted = !this._musicMuted;
+      const p = loadProgress();
+      p.musicMuted = this._musicMuted;
+      saveProgress(p);
+      // Click feedback always plays — it's an SFX, not music.
+      AUDIO.init();
+      AUDIO.playClick();
+      this._syncBgMusic();
+      draw();
+      this.tweens.add({ targets: c, scale: { from: 0.85, to: 1.0 }, duration: 200, ease: 'Back.easeOut' });
+    });
+    this.musicOnlyBtn = c;
+    this.musicOnlyBtnDraw = draw;
+  }
+
+  // Looped background music — exactly one track plays at a time, picked
+  // by `this.discoMode`. Mute is handled by Phaser's global
+  // `game.sound.mute` (mirrored from AUDIO.setMuted), so toggling sound
+  // off silences the track transparently without restarting it.
+  _syncBgMusic() {
+    // The MUSIC-only toggle gates background tracks independently of the
+    // master SOUND mute. When music is muted, neither track plays — but
+    // jumps, click, cheer, food/UI SFX still fire as long as SOUND is on.
+    const wantDisco  = !!this.discoMode  && !this._musicMuted;
+    const wantNormal = !this.discoMode   && !this._musicMuted;
+    this._setLoopMusic('_discoSound', 'discoMusic', 0.55, wantDisco);
+    this._setLoopMusic('_normalSound', 'normalMusic', 0.45, wantNormal);
+  }
+
+  // ---- Disco theme progression (disco mode only) ----
+  // Lerps the disco palette + backdrop colour + accent across 4 themes
+  // (purple → blue → orange → green) and loops endlessly. The sky / cloud
+  // / sun / moon system is left alone — this only recolours disco visuals.
+  _updateDiscoTheme(meters) {
+    const N = DISCO_THEME_NAMES.length;
+    const cyclePos = ((meters % DISCO_CYCLE_METERS) + DISCO_CYCLE_METERS) % DISCO_CYCLE_METERS;
+    let i = 0;
+    while (i < N - 1 && cyclePos >= DISCO_PHASE_CUM[i + 1]) i++;
+    const j = (i + 1) % N;
+    const segLen = DISCO_PHASE_LENGTHS[i];
+    const t = segLen > 0 ? (cyclePos - DISCO_PHASE_CUM[i]) / segLen : 0;
+
+    // Quantised dedupe so we only recompute when something visibly changed.
+    const tag = i + ':' + ((t * 200) | 0);
+    if (tag === this._lastDiscoThemeTag) return;
+    this._lastDiscoThemeTag = tag;
+
+    const A = DISCO_THEMES[DISCO_THEME_NAMES[i]];
+    const B = DISCO_THEMES[DISCO_THEME_NAMES[j]];
+
+    // Mutate the existing palette in place so anything reading it next
+    // frame (lasers, equalizer, side neon, particle tints) picks up the
+    // new colours without needing a recreate.
+    for (let k = 0; k < this.discoColors.length; k++) {
+      this.discoColors[k] = lerpHex(A.palette[k], B.palette[k], t);
+    }
+    this.discoAccent = lerpHex(A.accent, B.accent, t);
+    if (this.discoBg) this.discoBg.fillColor = lerpHex(A.bg, B.bg, t);
+  }
+
+  // ---- Disco party items (disco mode only) ----
+  // Cartoon collectibles that drift in at altitude milestones while disco
+  // mode is on. Cleaned up immediately if the player toggles disco off.
+  _tickPartyItem(meters) {
+    if (!this.discoMode) {
+      if (this._partyItem) this._destroyPartyItem(this._partyItem);
+      return;
+    }
+    if (!this._partyItem && meters >= this._nextPartyHeight) {
+      const x = PLAYER_X + Phaser.Math.Between(-90, 90);
+      const y = this.player.y - Phaser.Math.Between(280, 380);
+      this._spawnPartyItem(x, y);
+      this._partyMilestoneIdx++;
+      if (this._partyMilestoneIdx < this._partyMilestones.length) {
+        this._nextPartyHeight = this._partyMilestones[this._partyMilestoneIdx];
+      } else {
+        // Random 50–100 m gap from now on so items keep popping in fast.
+        this._nextPartyHeight = meters + Phaser.Math.Between(50, 100);
+      }
+    }
+    const p = this._partyItem;
+    if (p && p.alive) {
+      const dx = p.container.x - this.player.x;
+      const dy = p.container.y - this.player.y;
+      if (dx * dx + dy * dy < 38 * 38) {
+        this._eatPartyItem(p);
+        return;
+      }
+      if (p.container.y > this.player.y + GAME_H * 0.7) {
+        this._destroyPartyItem(p);
+      }
+    }
+  }
+
+  _spawnPartyItem(x, y) {
+    const c = this.add.container(x, y).setDepth(38);
+
+    // Neon glow halo — uses the current theme accent so it pops.
+    const glow = this.add.graphics();
+    const accent = this.discoAccent || 0xff6bd6;
+    glow.fillStyle(accent, 0.45);
+    glow.fillCircle(0, 0, 38);
+    glow.fillStyle(0xffffff, 0.55);
+    glow.fillCircle(0, 0, 24);
+    c.add(glow);
+
+    // Pick a custom PNG if any are loaded; otherwise fall back to emoji.
+    const pngKeys = ['discoItem1', 'discoItem2', 'discoItem3',
+                     'discoItem5', 'discoItem6', 'discoItem7', 'discoItem8']
+      .filter(k => this.textures.exists(k));
+    let sprite;
+    let isPng = false;
+    if (pngKeys.length > 0) {
+      const key = pngKeys[Math.floor(Math.random() * pngKeys.length)];
+      sprite = this.add.image(0, 0, key);
+      // Auto-scale so the longest edge fits a ~76 px target box, preserving
+      // aspect ratio and PNG transparency.
+      const tex = sprite.width || 1;
+      const tey = sprite.height || 1;
+      const target = 76;
+      const s = target / Math.max(tex, tey);
+      sprite.setScale(s);
+      isPng = true;
+    } else {
+      // Emoji fallback if no PNG loaded successfully.
+      const items = ['🥃', '🍺', '🎩', '🕶️', '🧢', '💎'];
+      const emoji = items[Math.floor(Math.random() * items.length)];
+      sprite = this.add.text(0, 0, emoji, {
+        fontFamily: 'Fredoka, sans-serif', fontSize: '40px'
+      }).setOrigin(0.5);
+    }
+    c.add(sprite);
+
+    // Float, gentle wobble (PNGs look weird spinning 360°), scale-pulse,
+    // glow pulse — all looping.
+    this.tweens.add({
+      targets: c, y: y - 12, yoyo: true, repeat: -1,
+      duration: 1300, ease: 'Sine.easeInOut'
+    });
+    if (isPng) {
+      this.tweens.add({
+        targets: sprite, angle: { from: -8, to: 8 },
+        yoyo: true, repeat: -1, duration: 1800, ease: 'Sine.easeInOut'
+      });
+    } else {
+      this.tweens.add({
+        targets: sprite, angle: 360, repeat: -1, duration: 4200
+      });
+    }
+    this.tweens.add({
+      targets: c, scale: { from: 1.0, to: 1.12 },
+      yoyo: true, repeat: -1, duration: 800, ease: 'Sine.easeInOut'
+    });
+    this.tweens.add({
+      targets: glow, alpha: { from: 0.55, to: 1.0 },
+      yoyo: true, repeat: -1, duration: 600, ease: 'Sine.easeInOut'
+    });
+
+    this._partyItem = { container: c, sprite, glow, alive: true, isPng };
+  }
+
+  _eatPartyItem(p) {
+    p.alive = false;
+    this.tweens.killTweensOf(p.container);
+    p.container.list.forEach(ch => this.tweens.killTweensOf(ch));
+    this.tweens.add({
+      targets: p.container,
+      x: this.player.x, y: this.player.y, scale: 0,
+      duration: 220, ease: 'Back.easeIn',
+      onComplete: () => { try { p.container.destroy(); } catch (e) {} }
+    });
+
+    // Hype burst — tints follow the active palette.
+    if (this.sparkles)   this.sparkles.explode(20, this.player.x, this.player.y);
+    if (this.discoNotes) this.discoNotes.explode(8,  this.player.x, this.player.y);
+    if (this.discoDust)  this.discoDust.explode(12, this.player.x, this.player.y);
+
+    // Cheer sequence — voice-line vibe via the existing synth.
+    AUDIO.playCheer();
+    this.time.delayedCall(180, () => AUDIO.playCheer());
+
+    const msgs = ['PARTY TIME!', 'DISCO BOOST!', 'OH YEAH!'];
+    this._addFloat(this.player.x, this.player.y - 50,
+      msgs[Math.floor(Math.random() * msgs.length)], '#ff6bd6');
+
+    // Hype boost — moderate, ~+55 m on medium gravity (smaller than food).
+    this.player.vy = -1500;
+    this.player.coyoteTime = 0;
+    this.player.setState && this.player.setState('jump');
+    this.player.setMood && this.player.setMood('happy');
+    this.chargedJumpQueued = false;
+    this.charging = false;
+
+    this.cameras.main.flash(220, 255, 200, 255);
+    this.cameras.main.shake(160, 0.005);
+
+    this._partyItem = null;
+  }
+
+  _destroyPartyItem(p) {
+    if (!p) return;
+    p.alive = false;
+    try {
+      this.tweens.killTweensOf(p.container);
+      p.container.list.forEach(ch => this.tweens.killTweensOf(ch));
+      p.container.destroy();
+    } catch (e) {}
+    if (this._partyItem === p) this._partyItem = null;
+  }
+
+  // Day-phase sweat drips for the character. Triangular intensity curve
+  // centred at the middle of the day band (cyclePos = 500 m, halfway
+  // through the 300–700 m day segment) and tapering to zero by the
+  // morning/evening transitions. Loops naturally with the cycle.
+  _tickSweat(meters) {
+    if (!this.sweatDrops || !this.player || this.gameOver) return;
+    const cyclePos = ((meters % SKY_CYCLE_METERS) + SKY_CYCLE_METERS) % SKY_CYCLE_METERS;
+    // Day is 300–700; pick its midpoint as the apex and let it fall off
+    // over the half-segment (200 m) so drips taper at the boundaries.
+    const dayMid = (SKY_PHASE_CUM[1] + SKY_PHASE_CUM[2]) / 2;
+    const dist = Math.abs(cyclePos - dayMid);
+    const sweat = Math.max(0, 1 - dist / 220);
+    if (sweat < 0.18) return;
+    if (this.time.now < this._sweatNextMs) return;
+    // Faster drips when hotter — interval shrinks linearly with intensity.
+    const interval = 1400 - sweat * 900;
+    this._sweatNextMs = this.time.now + interval + Phaser.Math.Between(-120, 120);
+    const sx = this.player.x + Phaser.Math.Between(-12, 12);
+    const sy = this.player.y - 18;
+    this.sweatDrops.explode(1, sx, sy);
+  }
+
+  // ---- Time-of-day sky progression (normal mode only) ----
+  // Height-driven LOOPING phases — interpolates sky gradient, cloud
+  // tints, star alpha, and sun/moon alpha based on the player's altitude
+  // wrapped to the cycle length, so night smoothly blends back into
+  // morning at the cycle boundary.
+  _redrawSky(meters) {
+    const layers = this.bg;
+    if (!layers || !layers.sky) return;
+
+    const names = SKY_PHASE_NAMES;
+    const N = names.length;
+    const cyclePos = ((meters % SKY_CYCLE_METERS) + SKY_CYCLE_METERS) % SKY_CYCLE_METERS;
+    // Walk the cumulative offsets to find which phase segment we're in.
+    let i = 0;
+    while (i < N - 1 && cyclePos >= SKY_PHASE_CUM[i + 1]) i++;
+    const j = (i + 1) % N;                  // night → morning wraps cleanly
+    const segLen = SKY_PHASE_LENGTHS[i];
+    const t = segLen > 0 ? (cyclePos - SKY_PHASE_CUM[i]) / segLen : 0;
+
+    // Cheap dedupe — quantised tag, skip if identical to last call.
+    const tag = i + ':' + ((t * 200) | 0);
+    if (tag === this._lastSkyTag) return;
+    this._lastSkyTag = tag;
+
+    const A = SKY_PHASES[names[i]];
+    const B = SKY_PHASES[names[j]];
+    const w = this.scale.width, h = this.scale.height;
+
+    // Redraw gradient — 4 vertical bands between 5 lerped stops.
+    const sky = layers.sky;
+    sky.clear();
+    const ys = [0, 0.20, 0.45, 0.72, 1.0];
+    for (let k = 0; k < ys.length - 1; k++) {
+      const cTop = lerpHex(A.stops[k],     B.stops[k],     t);
+      const cBot = lerpHex(A.stops[k + 1], B.stops[k + 1], t);
+      const y0 = ys[k] * h, y1 = ys[k + 1] * h;
+      sky.fillGradientStyle(cTop, cTop, cBot, cBot, 1);
+      sky.fillRect(0, y0, w, y1 - y0);
+    }
+
+    // Cloud band tints — applied to each Image inside each band Container.
+    const tintBand = (band, color) => {
+      if (!band || !band.list) return;
+      for (const img of band.list) { if (img.setTint) img.setTint(color); }
+    };
+    tintBand(layers.farClouds,  lerpHex(A.clouds.far,  B.clouds.far,  t));
+    tintBand(layers.midClouds,  lerpHex(A.clouds.mid,  B.clouds.mid,  t));
+    tintBand(layers.nearClouds, lerpHex(A.clouds.near, B.clouds.near, t));
+    tintBand(layers.frontMist,  lerpHex(A.clouds.mist, B.clouds.mist, t));
+
+    // Stars + sun + moon — simple alpha lerp. Sun fades with daylight,
+    // moon takes over toward night, stars only show evening onward.
+    if (layers.stars) layers.stars.setAlpha(A.stars + (B.stars - A.stars) * t);
+    if (layers.sun)   layers.sun.setAlpha(A.sun   + (B.sun   - A.sun)   * t);
+    if (layers.moon)  layers.moon.setAlpha(A.moon + (B.moon  - A.moon)  * t);
+  }
+
+  // ---- Food powerup (standard mode only) ----
+  _tickFood() {
+    if (this.discoMode) {
+      // Disco mode forbids food; if anything is left over from a mid-game
+      // toggle, sweep it up so the party doesn't have a stray donut.
+      if (this._foodActive) this._destroyFood(this._foodActive);
+      return;
+    }
+    // Spawn check: when the player has climbed past the next milestone.
+    if (!this._foodActive && this.height >= this._nextFoodHeight) {
+      const x = PLAYER_X + Phaser.Math.Between(-90, 90);
+      const y = this.player.y - Phaser.Math.Between(280, 380);
+      this._spawnFood(x, y);
+      this._foodMilestoneIdx++;
+      if (this._foodMilestoneIdx < this._foodMilestones.length) {
+        this._nextFoodHeight = this._foodMilestones[this._foodMilestoneIdx];
+      } else {
+        // After the curated set, randomise spacing so it stays surprising.
+        this._nextFoodHeight = this.height + Phaser.Math.Between(500, 900);
+      }
+    }
+    // Collision: simple radial test against the player.
+    const f = this._foodActive;
+    if (f && f.alive) {
+      const dx = f.container.x - this.player.x;
+      const dy = f.container.y - this.player.y;
+      if (dx * dx + dy * dy < 38 * 38) {
+        this._eatFood(f);
+        return;
+      }
+      // Drop-off: once the player has flown past it, recycle.
+      if (f.container.y > this.player.y + GAME_H * 0.7) {
+        this._destroyFood(f);
+      }
+    }
+  }
+
+  _spawnFood(x, y) {
+    const foods = ['🍔', '🍕', '🍩', '🍦', '🍟', '🍰'];
+    const emoji = foods[Math.floor(Math.random() * foods.length)];
+    const c = this.add.container(x, y).setDepth(38);
+
+    // Soft glow disc behind the food so it pops against the dreamy sky.
+    const glow = this.add.graphics();
+    glow.fillStyle(0xffd95a, 0.30);
+    glow.fillCircle(0, 0, 32);
+    glow.fillStyle(0xffffff, 0.45);
+    glow.fillCircle(0, 0, 22);
+    c.add(glow);
+
+    const sprite = this.add.text(0, 0, emoji, {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '40px'
+    }).setOrigin(0.5);
+    c.add(sprite);
+
+    // Idle: bob, slow rotate, scale-pulse, glow pulse — all looping.
+    this.tweens.add({
+      targets: c, y: y - 10, yoyo: true, repeat: -1,
+      duration: 1400, ease: 'Sine.easeInOut'
+    });
+    this.tweens.add({
+      targets: sprite, angle: { from: -10, to: 10 },
+      yoyo: true, repeat: -1, duration: 1900, ease: 'Sine.easeInOut'
+    });
+    this.tweens.add({
+      targets: c, scale: { from: 1.0, to: 1.10 },
+      yoyo: true, repeat: -1, duration: 900, ease: 'Sine.easeInOut'
+    });
+    this.tweens.add({
+      targets: glow, alpha: { from: 0.55, to: 1.0 },
+      yoyo: true, repeat: -1, duration: 700, ease: 'Sine.easeInOut'
+    });
+
+    this._foodActive = { container: c, sprite, glow, alive: true, emoji };
+  }
+
+  _eatFood(f) {
+    f.alive = false;
+    // Stop all animations on this food so they don't fight the eat tween.
+    this.tweens.killTweensOf(f.container);
+    f.container.list.forEach(ch => this.tweens.killTweensOf(ch));
+
+    // Shrink and pull toward the player — looks like the character chomps it.
+    this.tweens.add({
+      targets: f.container,
+      x: this.player.x,
+      y: this.player.y,
+      scale: 0,
+      duration: 220, ease: 'Back.easeIn',
+      onComplete: () => { try { f.container.destroy(); } catch (e) {} }
+    });
+
+    // Crumb / sparkle burst.
+    if (this.sparkles) this.sparkles.explode(20, this.player.x, this.player.y);
+    if (this.noteParticles) this.noteParticles.explode(8, this.player.x, this.player.y - 20);
+
+    // Munch SFX. Phaser's `game.sound.mute` (mirrored from AUDIO.setMuted)
+    // silences this when the master SOUND toggle is off — and since it's
+    // an SFX, the MUSIC-only toggle leaves it alone.
+    if (!AUDIO.muted) {
+      try { this.sound.play('munch', { volume: 0.9 }); } catch (e) {}
+    }
+    this.time.delayedCall(220, () => AUDIO.playCheer());
+
+    // Funny popup text — bouncy float using the existing helper.
+    const msgs = ['YUMMY BOOST!', 'MEGA POP!', 'SNACK POWER!'];
+    this._addFloat(this.player.x, this.player.y - 50,
+      msgs[Math.floor(Math.random() * msgs.length)], '#ff7aa8');
+
+    // Mega-jump: ~+100m on medium gravity (vy = -sqrt(2*g*h)).
+    this.player.vy = -2000;
+    this.player.coyoteTime = 0;
+    this.player.setState && this.player.setState('jump');
+    this.player.setMood && this.player.setMood('happy');
+    this.chargedJumpQueued = false;
+    this.charging = false;
+
+    // Camera reaction.
+    this.cameras.main.flash(220, 255, 240, 200);
+    this.cameras.main.shake(160, 0.005);
+
+    this._foodActive = null;
+  }
+
+  _destroyFood(f) {
+    if (!f) return;
+    f.alive = false;
+    try {
+      this.tweens.killTweensOf(f.container);
+      f.container.list.forEach(ch => this.tweens.killTweensOf(ch));
+      f.container.destroy();
+    } catch (e) {}
+    if (this._foodActive === f) this._foodActive = null;
+  }
+
+  _setLoopMusic(refKey, soundKey, volume, on) {
+    if (!this[refKey]) {
+      try {
+        this[refKey] = this.sound.add(soundKey, { loop: true, volume });
+      } catch (e) { return; }
+    }
+    const s = this[refKey];
+    if (on) {
+      if (!s.isPlaying) { try { s.play(); } catch (e) {} }
+    } else {
+      if (s.isPlaying) { try { s.stop(); } catch (e) {} }
+    }
+  }
+
   _buildDiscoLayer() {
     const w = this.scale.width, h = this.scale.height;
-    this.discoColors = [0xff6bd6, 0x6dd0ff, 0xffd95a, 0x9adf7a, 0xb582ff, 0xff9a4a];
+    // Initialise from the first theme so palettes never start at zero.
+    this.discoColors = DISCO_THEMES.purple.palette.slice();
+    this.discoAccent = DISCO_THEMES.purple.accent;
     this.discoOverlayAlpha = this.discoMode ? 1 : 0;
     this.discoFlashAlpha = 0;
     this._discoT = 0;
     this._lastComboMilestone = 0;
 
-    // Dark party tint (sits on top of the calm sky to recolor the world)
+    // Solid dark-purple party backdrop. Lives ABOVE the dreamy sky/paper
+    // (depth -190 keeps it just above the sky gradient at -200) so when
+    // disco is on, the cloud world is invisible.
     this.discoBg = this.add.rectangle(w / 2, h / 2, w, h, 0x140828, 0)
-      .setScrollFactor(0).setDepth(-180);
+      .setScrollFactor(0).setDepth(-190);
+    // Subtle vignette gradient — drawn each frame in _drawDiscoEffects.
 
-    // One graphics object renders ALL the heavy disco effects (beams, skyline, floor glow, ball)
+    // Solid-blend graphics for things that need to look DARK against the
+    // backdrop (speaker cabinets, city skyline). Sits behind the lights
+    // so beams brighten over the silhouettes.
+    this.discoGfxSolid = this.add.graphics().setScrollFactor(0).setDepth(-178);
+
+    // Additive graphics object — beams, side neon, equalizer, speaker
+    // neon rings, ball halo, floor glow. One Graphics, redrawn each frame.
     this.discoGfx = this.add.graphics().setScrollFactor(0).setDepth(-160);
     this.discoGfx.setBlendMode(Phaser.BlendModes.SCREEN);
+
+    // Pre-baked city skyline silhouettes — generated once with random
+    // heights/widths so we don't pay layout cost per frame.
+    const skylineW = this.scale.width;
+    const buildings = [];
+    let bx = 0;
+    while (bx < skylineW) {
+      const bw = 18 + Math.floor(Math.random() * 32);
+      const bh = 28 + Math.floor(Math.random() * 95);
+      buildings.push({ x: bx, w: bw, h: bh });
+      bx += bw + 2 + Math.floor(Math.random() * 5);
+    }
+    this._discoBuildings = buildings;
+
+    // Backmost disco backdrop — single PNG covering the screen, sits just
+    // above the dark backdrop tint so the lasers / speakers / equalizer
+    // / particles all render in front. Slightly darkened with a low
+    // alpha so it feels like a deep nightclub setting, not the focus.
+    if (this.textures.exists('discoBackdrop')) {
+      const img = this.add.image(w / 2, h / 2, 'discoBackdrop')
+        .setScrollFactor(0).setDepth(-185).setVisible(false);
+      // Cover-fit (max scale of the two axes) so aspect ratio is preserved
+      // and no edge gaps show, regardless of source resolution.
+      const cover = Math.max(w / img.width, h / img.height);
+      img.setScale(cover);
+      img.setTint(0x8a78ff); // soft cool tint to blend into the disco scene
+      img.setAlpha(0.55);    // dimmed so it stays atmospheric
+      this.discoBackdropImg = img;
+    } else {
+      this.discoBackdropImg = null;
+    }
 
     // Soft beat flash (re-tinted on each beat)
     this.discoFlash = this.add.rectangle(w / 2, h / 2, w, h, 0xff6bd6, 0)
       .setScrollFactor(0).setDepth(-50).setBlendMode(Phaser.BlendModes.SCREEN);
+
+    // Floating neon music notes — emitted from the bottom of the screen on
+    // every beat while disco mode is on, drift upward and fade out.
+    this.discoNotes = this.add.particles(0, 0, 'note', {
+      lifespan: 2400,
+      speed: { min: 40, max: 100 },
+      angle: { min: -110, max: -70 },
+      scale: { start: 0.7, end: 0.0 },
+      alpha: { start: 0.95, end: 0 },
+      tint: this.discoColors,
+      blendMode: 'ADD',
+      emitting: false
+    }).setScrollFactor(0).setDepth(-110);
+
+    // Tiny neon spark dust — short-lived, sprinkled on every beat for the
+    // "alive arcade" feel. Reuses the existing sparkle texture.
+    this.discoDust = this.add.particles(0, 0, 'sparkle', {
+      lifespan: 900,
+      speed: { min: 20, max: 80 },
+      scale: { start: 0.55, end: 0 },
+      alpha: { start: 0.9, end: 0 },
+      tint: this.discoColors,
+      blendMode: 'ADD',
+      emitting: false
+    }).setScrollFactor(0).setDepth(-105);
 
     // Toast text (reused)
     this.toastText = this.add.text(w / 2, 80, '', {
@@ -2340,7 +3618,16 @@ class GameScene extends Phaser.Scene {
 
   _drawDiscoEffects(dt) {
     const g = this.discoGfx;
+    const gSolid = this.discoGfxSolid;
     g.clear();
+    if (gSolid) gSolid.clear();
+    // Backdrop image fades in/out with the disco overlay alpha. Done
+    // BEFORE the early return so it hides cleanly when disco fades off.
+    if (this.discoBackdropImg) {
+      this.discoBackdropImg.setVisible(this.discoOverlayAlpha > 0.02);
+      // Multiplied by the still-image's base 0.55 alpha so it stays subtle.
+      this.discoBackdropImg.setAlpha(this.discoOverlayAlpha * 0.55);
+    }
     if (this.discoOverlayAlpha < 0.02) return;
     const w = this.scale.width, h = this.scale.height;
     this._discoT += dt;
@@ -2349,6 +3636,21 @@ class GameScene extends Phaser.Scene {
     const pulse = Math.max(0, 1 - phase * 1.4);
     const a = this.discoOverlayAlpha;
     const colors = this.discoColors;
+    const accent = this.discoAccent || 0xb582ff;
+
+    // ---- City skyline silhouette (pre-baked, drawn far back) ----
+    if (gSolid && this._discoBuildings) {
+      const cityY = h * 0.78;
+      gSolid.fillStyle(0x000000, 0.45 * a);
+      for (const b of this._discoBuildings) {
+        gSolid.fillRect(b.x, cityY - b.h, b.w, b.h);
+      }
+      // Faint accent-tinted "city lights" along the rooftops on additive.
+      g.fillStyle(accent, 0.18 * a);
+      for (const b of this._discoBuildings) {
+        g.fillRect(b.x + 2, cityY - b.h, b.w - 4, 2);
+      }
+    }
 
     // 4 rotating light beams from off-screen top-center
     const cx = w / 2, cy = -40;
@@ -2366,35 +3668,104 @@ class GameScene extends Phaser.Scene {
       g.fillTriangle(cx + px, cy + py, cx - px, cy - py, tipX, tipY);
     }
 
-    // Bottom floor glow
-    g.fillStyle(0xff6bd6, (0.22 + 0.25 * pulse) * a);
+    // ---- Bottom floor glow ----
+    g.fillStyle(accent, (0.22 + 0.25 * pulse) * a);
     g.fillRect(0, h - 50, w, 50);
-    g.fillStyle(0xffd95a, (0.10 + 0.15 * pulse) * a);
+    g.fillStyle(colors[2], (0.10 + 0.15 * pulse) * a);
     g.fillRect(0, h - 16, w, 16);
 
-    // Equalizer skyline at the very bottom
-    const barCount = 14;
+    // ---- Beefy equalizer at the very bottom (taller, more bars) ----
+    const barCount = 22;
     const barW = w / barCount;
     for (let i = 0; i < barCount; i++) {
-      const wave = Math.abs(Math.sin(t * 4 + i * 0.7));
-      const barH = 14 + (wave + pulse * 0.6) * 36;
+      const wave = Math.abs(Math.sin(t * 4 + i * 0.55));
+      const barH = 22 + (wave + pulse * 0.7) * 70;
       const c = colors[i % colors.length];
-      g.fillStyle(c, 0.85 * a);
+      g.fillStyle(c, 0.92 * a);
       g.fillRect(i * barW + 2, h - barH - 4, barW - 4, barH);
+      // Soft top highlight on each bar
+      g.fillStyle(0xffffff, 0.45 * a);
+      g.fillRect(i * barW + 2, h - barH - 4, barW - 4, 3);
     }
 
-    // Top disco ball with soft halo
+    // Top disco ball with soft halo — halo tint follows the active theme
+    // accent so the ball visibly shifts with each disco phase.
     const ballX = w / 2 + Math.sin(t * 0.9) * 32;
     const ballY = 56;
+    const ballAccent = this.discoAccent || 0xb582ff;
     g.fillStyle(0xffffff, (0.18 + 0.22 * pulse) * a);
     g.fillCircle(ballX, ballY, 26);
-    g.fillStyle(0xb582ff, (0.45 + 0.3 * pulse) * a);
+    g.fillStyle(ballAccent, (0.45 + 0.3 * pulse) * a);
     g.fillCircle(ballX, ballY, 14);
     g.fillStyle(0xffffff, 0.95 * a);
     g.fillCircle(ballX - 4, ballY - 4, 3.5);
 
-    // Bg tint alpha-update via discoBg
-    if (this.discoBg) this.discoBg.fillAlpha = 0.55 * a;
+    // Side neon strips — vertical glowing bars on the left and right edges
+    // that pulse with the beat. Each side cycles through the disco palette
+    // so the room feels lit by chasing club lights.
+    const sideC = colors[(Math.floor(t * 1.6)) % colors.length];
+    const sideAlpha = (0.30 + 0.45 * pulse) * a;
+    g.fillStyle(sideC, sideAlpha);
+    g.fillRect(0, 0, 14, h);
+    g.fillRect(w - 14, 0, 14, h);
+    // Soft inward halo so the neon "bleeds" into the scene
+    g.fillStyle(sideC, sideAlpha * 0.45);
+    g.fillRect(14, 0, 18, h);
+    g.fillRect(w - 32, 0, 18, h);
+
+    // ---- Full-height arena speakers (left + right edges) ----
+    // Two-pass: solid cabinets + cone discs on gSolid (normal blend),
+    // glowing neon outline rings on g (additive).
+    const spkPump = 1 + 0.10 * pulse;
+    const spkW = 76;                  // cabinet width
+    const spkXL = spkW / 2 + 2;       // left speaker centre x
+    const spkXR = w - spkW / 2 - 2;   // right speaker centre x
+    [spkXL, spkXR].forEach((cxS) => {
+      // Solid cabinet body
+      if (gSolid) {
+        gSolid.fillStyle(0x140820, 0.78 * a);
+        gSolid.fillRect(cxS - spkW / 2, 0, spkW, h);
+        gSolid.fillStyle(0x000000, 0.45 * a);
+        gSolid.fillRect(cxS - spkW / 2 + 4, 4, spkW - 8, h - 8);
+      }
+      // Top tweeter slot (small bright pill)
+      g.fillStyle(0xffffff, 0.45 * a);
+      g.fillRoundedRect(cxS - 22, h * 0.05, 44, 12, 6);
+      // Big upper woofer
+      const upY = h * 0.40;
+      const upR = 32;
+      g.fillStyle(accent, (0.55 + 0.25 * pulse) * a);  // outer neon ring
+      g.fillCircle(cxS, upY, upR + 8 * spkPump);
+      if (gSolid) {
+        gSolid.fillStyle(0x070310, 0.9 * a);
+        gSolid.fillCircle(cxS, upY, upR);
+        gSolid.fillStyle(0x2a1a3a, 0.85 * a);
+        gSolid.fillCircle(cxS, upY, upR * 0.75 * spkPump);
+        gSolid.fillStyle(0x000000, 1.0 * a);
+        gSolid.fillCircle(cxS, upY, upR * 0.40 * spkPump);
+      }
+      g.fillStyle(0xffffff, 0.18 * a);
+      g.fillCircle(cxS - upR * 0.30, upY - upR * 0.30, upR * 0.18);  // shine
+      // Smaller lower woofer
+      const lowY = h * 0.66;
+      const lowR = 26;
+      g.fillStyle(accent, (0.55 + 0.25 * pulse) * a);
+      g.fillCircle(cxS, lowY, lowR + 7 * spkPump);
+      if (gSolid) {
+        gSolid.fillStyle(0x070310, 0.9 * a);
+        gSolid.fillCircle(cxS, lowY, lowR);
+        gSolid.fillStyle(0x2a1a3a, 0.85 * a);
+        gSolid.fillCircle(cxS, lowY, lowR * 0.75 * spkPump);
+        gSolid.fillStyle(0x000000, 1.0 * a);
+        gSolid.fillCircle(cxS, lowY, lowR * 0.40 * spkPump);
+      }
+      g.fillStyle(0xffffff, 0.18 * a);
+      g.fillCircle(cxS - lowR * 0.30, lowY - lowR * 0.30, lowR * 0.18);
+    });
+
+    // Backdrop tint — near-opaque in disco mode so the cloud world below
+    // is fully replaced.
+    if (this.discoBg) this.discoBg.fillAlpha = 0.95 * a;
   }
 
   _showToast(text, color) {
@@ -2464,7 +3835,11 @@ class GameScene extends Phaser.Scene {
 
     // Quick sparkle burst behind it
     if (this.sparkles) this.sparkles.explode(24, w / 2, h * 0.45);
-    AUDIO.playCheer();
+    // "Yeah boy!" SFX — gated by master mute (SOUND toggle), unaffected
+    // by the MUSIC-only toggle since this is an SFX, not a track.
+    if (!AUDIO.muted) {
+      try { this.sound.play('yeahboy', { volume: 0.95 }); } catch (e) {}
+    }
     this.cameras.main.flash(180, 255, 240, 200);
     this.cameras.main.shake(140, 0.004);
 
@@ -2508,6 +3883,40 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  // First-run lore intro — two short lines fade in/out near the top of the
+  // screen while the player reads. Marks `loreSeen` so it never replays.
+  _maybeShowLoreIntro() {
+    const p = loadProgress();
+    if (p.loreSeen) return;
+    const w = this.scale.width, h = this.scale.height;
+    const lines = [
+      'The sky once moved with rhythm...',
+      'Follow the lost beats.'
+    ];
+    lines.forEach((line, i) => {
+      const t = this.add.text(w / 2, h * 0.30 + i * 28, line, {
+        fontFamily: 'Caveat, Fredoka, sans-serif',
+        fontSize: '24px',
+        color: '#fff4d8',
+        fontStyle: '700'
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(440).setAlpha(0);
+      t.setStroke('#2a2440', 5);
+      const start = 600 + i * 1000;
+      this.tweens.add({
+        targets: t,
+        alpha: { from: 0, to: 1 },
+        duration: 600, delay: start, ease: 'Sine.easeOut'
+      });
+      this.tweens.add({
+        targets: t,
+        alpha: { from: 1, to: 0 },
+        duration: 800, delay: start + 1800, ease: 'Sine.easeIn',
+        onComplete: () => { try { t.destroy(); } catch (e) {} }
+      });
+    });
+    saveProgress(Object.assign(p, { loreSeen: true }));
+  }
+
   _showToast(text, color) {
     if (!this.toastText) return;
     this.toastText.setText(text);
@@ -2524,36 +3933,143 @@ class GameScene extends Phaser.Scene {
     });
   }
 
+  _buildPauseOverlay(w, h) {
+    // Flat scene-level objects with explicit depths. NO nested containers
+    // here — every interactive element is a direct child of the scene so
+    // hit-testing is trivial and there is zero transform math to get wrong.
+    // Depth ladder:
+    //   gameplay  : <  300
+    //   dim/title : 300/305
+    //   button bg : 310
+    //   button txt: 311
+    //   hit zone  : 312  (topmost)
+    this._pauseObjs = [];
+
+    const dim = this.add.rectangle(w / 2, h / 2, w, h, 0x000000, 0.66)
+      .setScrollFactor(0).setDepth(300).setVisible(false);
+    this._pauseObjs.push(dim);
+
+    const title = this.add.text(w / 2, h / 2 - 130, 'PAUSED', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '52px',
+      color: '#fff4d8', fontStyle: '700'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(305).setVisible(false);
+    title.setStroke('#2a2440', 6);
+    this._pauseObjs.push(title);
+
+    this._pauseObjs.push(...this._mkPauseBtn(
+      w / 2, h / 2 - 20, 'RESUME', 0x9adf7a,
+      () => {
+        console.log('[pause] Resume clicked');
+        this._togglePause();
+      }
+    ));
+    this._pauseObjs.push(...this._mkPauseBtn(
+      w / 2, h / 2 + 60, 'QUIT TO MENU', 0xff7aa8,
+      () => {
+        console.log('[pause] Quit button clicked');
+        this._quitToMenu();
+      },
+      false  // skip the synth click — _quitToMenu plays its own voice clip
+    ));
+    console.log('[pause] Quit button created');
+  }
+
+  // Returns [bg, txt, hit] — three flat scene-level objects to toggle.
+  _mkPauseBtn(x, y, label, color, onClick, playClickSfx = true) {
+    const bw = 240, bh = 56;
+
+    const bg = this.add.graphics()
+      .setScrollFactor(0).setDepth(310).setVisible(false);
+    let pressOffset = 0;
+    const drawBg = () => {
+      bg.clear();
+      // shadow
+      bg.fillStyle(0x2a2440, 1);
+      bg.fillRoundedRect(x - bw / 2, y - bh / 2 + 6 - pressOffset, bw, bh, 14);
+      // body
+      bg.fillStyle(color, 1);
+      bg.fillRoundedRect(x - bw / 2, y - bh / 2 - pressOffset, bw, bh, 14);
+      bg.lineStyle(3, 0x2a2440, 1);
+      bg.strokeRoundedRect(x - bw / 2, y - bh / 2 - pressOffset, bw, bh, 14);
+    };
+    drawBg();
+
+    const txt = this.add.text(x, y - 2, label, {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '22px',
+      color: '#2a2440', fontStyle: '700'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(311).setVisible(false);
+
+    // Top-most hit zone — set interactive directly with the explicit cursor
+    // option. Lives at scene root with its own depth, no parent container.
+    const hit = this.add.zone(x, y, bw + 14, bh + 14)
+      .setScrollFactor(0).setDepth(312).setVisible(false);
+    hit.setInteractive({ useHandCursor: true });
+
+    hit.on('pointerover', () => {
+      pressOffset = 2;
+      drawBg();
+    });
+    hit.on('pointerout', () => {
+      pressOffset = 0;
+      drawBg();
+      txt.y = y - 2;
+    });
+    // pointerdown drives the action — per spec, no waiting for release.
+    hit.on('pointerdown', (pointer, _lx, _ly, event) => {
+      // Stop propagation so no gameplay-layer handler also fires.
+      if (event && event.stopPropagation) event.stopPropagation();
+      pressOffset = -3;
+      drawBg();
+      txt.y = y + 1;
+      if (playClickSfx) AUDIO.playClick();
+      // Brief lockout so a double-tap can't fire onClick twice.
+      if (this._pauseBtnLockUntil && this.time.now < this._pauseBtnLockUntil) return;
+      this._pauseBtnLockUntil = this.time.now + 300;
+      // Fire on the next tick so the visual press is visible to the user
+      // even if the action navigates the scene.
+      this.time.delayedCall(40, () => {
+        pressOffset = 0;
+        drawBg();
+        txt.y = y - 2;
+        onClick();
+      });
+    });
+
+    return [bg, txt, hit];
+  }
+
   _togglePause() {
     if (this.gameOver) return;
     this.paused = !this.paused;
     if (this.paused) {
       this.tweens.pauseAll();
       this.beat.event && (this.beat.event.paused = true);
-      this.pauseOverlay.setVisible(true);
-      // Only let the overlay receive clicks while we're paused
-      if (this._pauseHits) {
-        this._pauseHits.pbg.setInteractive();
-        this._pauseHits.quitHit.setInteractive({ useHandCursor: true });
-      }
+      this._setPauseUiVisible(true);
     } else {
       this.tweens.resumeAll();
       this.beat.event && (this.beat.event.paused = false);
-      this.pauseOverlay.setVisible(false);
-      // Disable overlay input so it can't eat in-game clicks
-      if (this._pauseHits) {
-        this._pauseHits.pbg.disableInteractive();
-        this._pauseHits.quitHit.disableInteractive();
-      }
+      this._setPauseUiVisible(false);
     }
   }
 
+  _setPauseUiVisible(on) {
+    if (!this._pauseObjs) return;
+    this._pauseObjs.forEach(o => o.setVisible(on));
+  }
+
   _quitToMenu() {
-    if (this.gameOver) return;
+    if (this.gameOver || this._quittingToMenu) return;
+    this._quittingToMenu = true;
     this.gameOver = true;
-    AUDIO.playClick();
     AUDIO.stopBeatLoop();
     if (this.beat) this.beat.stop();
+    // Stop any in-flight Phaser-loaded sounds (jump, longjump, fail, star).
+    try { this.sound.stopAll(); } catch (e) {}
+    // Quit voice clip — played AFTER stopAll so it isn't cut by it.
+    // Gated by master mute (SOUND toggle); MUSIC toggle doesn't affect SFX.
+    if (!AUDIO.muted) {
+      try { this.sound.play('quit', { volume: 0.95 }); } catch (e) {}
+    }
 
     // Save current best so the run isn't wasted
     const finalHeight = Math.floor((this.height || 0) / 10);
@@ -2564,15 +4080,25 @@ class GameScene extends Phaser.Scene {
     if ((this.bestCombo || 0) > bestCombo) bestCombo = this.bestCombo;
     saveProgress(Object.assign(progress, { bestHeight, bestCombo, muted: AUDIO.muted }));
 
-    // make sure the world isn't frozen by pause when we leave
+    // Hide the pause overlay and freeze gameplay during the fade-out so
+    // the player never sees a half-frame of the world ticking onward.
     if (this.paused) {
       this.tweens.resumeAll();
       this.paused = false;
     }
-    if (this.pauseOverlay) this.pauseOverlay.setVisible(false);
+    this._setPauseUiVisible(false);
+    this.physics && this.physics.world && this.physics.world.pause && this.physics.world.pause();
 
-    this.cameras.main.fadeOut(280, 255, 245, 220);
-    this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Menu'));
+    // Always navigate, even if camerafadeoutcomplete somehow doesn't fire.
+    let navigated = false;
+    const goToMenu = () => {
+      if (navigated) return;
+      navigated = true;
+      this.scene.start('Menu');
+    };
+    this.cameras.main.fadeOut(260, 255, 245, 220);
+    this.cameras.main.once('camerafadeoutcomplete', goToMenu);
+    this.time.delayedCall(360, goToMenu);
   }
 
   _onBeat() {
@@ -2585,6 +4111,17 @@ class GameScene extends Phaser.Scene {
         this._discoColorIdx = ((this._discoColorIdx || 0) + 1) % this.discoColors.length;
         this.discoFlash.fillColor = this.discoColors[this._discoColorIdx];
         this.discoFlashAlpha = 0.18;
+      }
+      // Ambient particles per beat: a couple of neon notes float up from
+      // random spots along the bottom edge, plus a tiny dust burst near
+      // the player so the world feels musically reactive.
+      const w = this.scale.width, h = this.scale.height;
+      if (this.discoNotes) {
+        this.discoNotes.explode(2, 40 + Math.random() * (w - 80), h + 16);
+        this.discoNotes.explode(1, 40 + Math.random() * (w - 80), h + 16);
+      }
+      if (this.discoDust && this.player) {
+        this.discoDust.explode(4, this.player.x, this.player.y - 24);
       }
     }
   }
@@ -2886,6 +4423,23 @@ class GameScene extends Phaser.Scene {
       }
     }
 
+    // Food powerup (standard mode only): spawn at climb milestones,
+    // check collision, and clean up if the player has flown past it.
+    this._tickFood();
+
+    // Time-of-day sky progression — driven by altitude. Skipped while
+    // disco mode is on so its neon backdrop is never disturbed.
+    if (!this.discoMode) {
+      const meters = this.height / 10;
+      this._redrawSky(meters);
+      this._tickSweat(meters);
+    } else {
+      // Disco mode — height-based theme cycle + party item progression.
+      const meters = this.height / 10;
+      this._updateDiscoTheme(meters);
+      this._tickPartyItem(meters);
+    }
+
     // camera follow upward only
     const targetCamY = Math.min(this.cameras.main.scrollY, this.player.y - GAME_H * 0.55);
     this.cameras.main.scrollY = Phaser.Math.Linear(this.cameras.main.scrollY, targetCamY, 0.12);
@@ -3054,12 +4608,24 @@ class GameScene extends Phaser.Scene {
       targets: this.uiCombo, scale: { from: 1.2, to: 1.0 }, duration: 200, ease: 'Back.easeOut'
     });
 
-    // Combo milestone hype (every 10) when in disco mode
-    if (this.discoMode && this.combo > 0 && this.combo % 10 === 0 && this.combo !== this._lastComboMilestone) {
+    // Combo milestone hype (every 10). Lore-themed lines lean in on bigger
+    // combos so the world's "rhythm restoration" reveals itself naturally.
+    if (this.combo > 0 && this.combo % 10 === 0 && this.combo !== this._lastComboMilestone) {
       this._lastComboMilestone = this.combo;
-      const lines = ['FEEL THE BEAT!', 'DISCO FEVER!', 'PARTY JUMP!', 'ON FIRE!', 'KEEP GROOVING!'];
-      this._showHype(lines[Math.floor(Math.random() * lines.length)]);
+      const discoLines = ['FEEL THE BEAT!', 'DISCO FEVER!', 'PARTY JUMP!', 'ON FIRE!', 'KEEP GROOVING!'];
+      const loreLines = ['RHYTHM RESTORED', 'THE SKY IS SINGING', 'KEEP THE BEAT ALIVE', 'LOST BEATS AWAKENED'];
+      let pool;
+      if (this.combo >= 30) pool = loreLines;
+      else if (this.combo >= 20) pool = loreLines.concat(discoLines);
+      else pool = this.discoMode ? discoLines : loreLines;
+      this._showHype(pool[Math.floor(Math.random() * pool.length)]);
       AUDIO.playCheer();
+      // Subtle "the world feels more alive" beat: sprinkle music notes
+      // around the player at every lore milestone, intensifying with combo.
+      if (this.noteParticles) {
+        const count = Math.min(14, 4 + Math.floor(this.combo / 10));
+        this.noteParticles.explode(count, this.player.x, this.player.y - 30);
+      }
     }
     if (this.combo === 0) this._lastComboMilestone = 0;
   }
@@ -3068,6 +4634,8 @@ class GameScene extends Phaser.Scene {
     if (this.gameOver) return;
     this.gameOver = true;
     AUDIO.stopBeatLoop();
+    if (this._discoSound) { try { this._discoSound.stop(); } catch (e) {} }
+    if (this._normalSound) { try { this._normalSound.stop(); } catch (e) {} }
     // Game-over voice clip (respects the global sound toggle)
     if (!AUDIO.muted) {
       try { this.sound.play('fail', { volume: 0.85 }); } catch (e) {}
