@@ -4633,16 +4633,32 @@ class GameScene extends Phaser.Scene {
   _endGame() {
     if (this.gameOver) return;
     this.gameOver = true;
-    AUDIO.stopBeatLoop();
-    if (this._discoSound) { try { this._discoSound.stop(); } catch (e) {} }
-    if (this._normalSound) { try { this._normalSound.stop(); } catch (e) {} }
-    // Game-over voice clip (respects the global sound toggle)
+    if (this.discoMode) console.log('[gameover] Disco Game Over triggered');
+
+    // Each cleanup step is wrapped so a single failure can't block the
+    // scene transition that follows. Disco mode in particular has more
+    // moving parts (music, particles, big graphics layers) and was
+    // occasionally leaving the renderer in a broken state.
+    try { AUDIO.stopBeatLoop(); } catch (e) {}
+    try { if (this._discoSound)  this._discoSound.stop();  } catch (e) {}
+    try { if (this._normalSound) this._normalSound.stop(); } catch (e) {}
+    // Force the disco overlay alpha to 0 so _drawDiscoEffects (if it
+    // somehow runs again before shutdown) draws nothing — prevents
+    // half-rendered laser frames over a half-destroyed scene.
+    this.discoOverlayAlpha = 0;
+    try { if (this.discoGfx)      this.discoGfx.clear();      } catch (e) {}
+    try { if (this.discoGfxSolid) this.discoGfxSolid.clear(); } catch (e) {}
+    // Explicitly tear down active food / party item now (don't wait for
+    // the scene shutdown handler) so their tweens can't fire onComplete
+    // callbacks during the fade-out.
+    try { if (this._foodActive)  this._destroyFood(this._foodActive); }       catch (e) {}
+    try { if (this._partyItem)   this._destroyPartyItem(this._partyItem); }   catch (e) {}
     if (!AUDIO.muted) {
       try { this.sound.play('fail', { volume: 0.85 }); } catch (e) {}
     }
-    this.beat.stop();
-    this.player.dead = true;
-    this.player.setMood('scream');
+    try { if (this.beat) this.beat.stop(); } catch (e) {}
+    try { if (this.player) { this.player.dead = true; this.player.setMood('scream'); } } catch (e) {}
+    console.log('[gameover] Scene cleanup complete (disco=' + !!this.discoMode + ')');
 
     const finalHeight = Math.floor(this.height / 10);
     const progress = loadProgress();
@@ -4650,18 +4666,37 @@ class GameScene extends Phaser.Scene {
     let bestCombo = progress.bestCombo || 0;
     if (finalHeight > bestHeight) bestHeight = finalHeight;
     if (this.bestCombo > bestCombo) bestCombo = this.bestCombo;
-    saveProgress(Object.assign(progress, { bestHeight, bestCombo, muted: AUDIO.muted }));
+    try {
+      saveProgress(Object.assign(progress, { bestHeight, bestCombo, muted: AUDIO.muted }));
+    } catch (e) {}
 
-    this.cameras.main.fadeOut(450, 28, 28, 60);
-    this.cameras.main.once('camerafadeoutcomplete', () => {
-      this.scene.start('GameOver', {
-        height: finalHeight,
-        bestCombo: this.bestCombo,
-        perfects: this.perfectCount,
-        difficulty: this.difficulty,
-        bestHeight, bestComboAll: bestCombo
-      });
-    });
+    // Always navigate to GameOver — backup timer guarantees the scene
+    // swap fires even if camerafadeoutcomplete is dropped (which is what
+    // produces the rare blank-screen freeze in disco mode).
+    let navigated = false;
+    const goToGameOver = () => {
+      if (navigated) return;
+      navigated = true;
+      try {
+        this.scene.start('GameOver', {
+          height: finalHeight,
+          bestCombo: this.bestCombo,
+          perfects: this.perfectCount,
+          difficulty: this.difficulty,
+          bestHeight, bestComboAll: bestCombo
+        });
+      } catch (e) {
+        // Last-resort fallback: kick straight back to the menu so the
+        // player isn't stuck staring at a black screen.
+        try { this.scene.start('Menu'); } catch (_) {}
+      }
+    };
+    try {
+      this.cameras.main.fadeOut(450, 28, 28, 60);
+      this.cameras.main.once('camerafadeoutcomplete', goToGameOver);
+    } catch (e) {}
+    // Backup: 550 ms is just past the fade duration.
+    try { this.time.delayedCall(550, goToGameOver); } catch (e) { goToGameOver(); }
   }
 }
 
@@ -4749,6 +4784,7 @@ class GameOverScene extends Phaser.Scene {
       this.cameras.main.fadeOut(300, 255, 245, 220);
       this.cameras.main.once('camerafadeoutcomplete', () => this.scene.start('Menu'));
     });
+    console.log('[gameover] Game Over UI created');
   }
 
   _mkBtn(x, y, label, color, onClick) {
