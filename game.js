@@ -2085,21 +2085,17 @@ class DifficultyScene extends Phaser.Scene {
     const _go = () => {
       if (_navStarted) return;
       _navStarted = true;
-      console.log('[difficulty] Recreating Game scene (diff=' + diffKey + ')');
-      // Hard reset: tear down and re-register the Game scene so each
-      // play-through starts from a brand-new instance with zero leaked
-      // state from a prior run (timers, tweens, listeners, sound refs,
-      // particle emitters, etc.). This is the bulletproof replay-loop fix.
+      console.log('[difficulty] Attempting to start Game scene (diff=' + diffKey + ')');
+      // Note: do NOT use sm.remove/sm.add here. Phaser queues those
+      // operations and they don't execute until the next update tick,
+      // so the immediate scene.start would run against a scene that is
+      // not yet registered, silently doing nothing. The shutdown handler
+      // and init/create resets handle leak prevention instead.
       try {
-        const sm = this.scene.manager;
-        if (sm.getScene('Game')) {
-          try { sm.stop('Game'); } catch (e) {}
-          try { sm.remove('Game'); } catch (e) {}
-        }
-        sm.add('Game', GameScene, false);
         this.scene.start('Game', { difficulty: diffKey });
+        console.log('[difficulty] scene.start(Game) called');
       } catch (e) {
-        console.error('[difficulty] Game scene recreate failed', e);
+        console.error('[difficulty] scene.start(Game) failed', e);
         try { this.scene.start('Menu'); } catch (_) {}
       }
     };
@@ -4969,21 +4965,13 @@ class GameOverScene extends Phaser.Scene {
         if (started) return;
         started = true;
         try {
-          // RETRY = fully re-instantiate the Game scene so no leaked
-          // state from the just-finished run can corrupt the new one.
-          if (sceneKey === 'Game') {
-            const sm = this.scene.manager;
-            if (sm.getScene('Game')) {
-              try { sm.stop('Game'); } catch (e) {}
-              try { sm.remove('Game'); } catch (e) {}
-            }
-            sm.add('Game', GameScene, false);
-            this.scene.start('Game', payload);
-          } else if (payload) {
-            this.scene.start(sceneKey, payload);
-          } else {
-            this.scene.start(sceneKey);
-          }
+          // Use plain scene.start. sm.remove + sm.add are queued by
+          // Phaser and don't take effect until the next tick, so the
+          // immediate scene.start would run against an unregistered
+          // scene and silently do nothing.
+          if (payload) this.scene.start(sceneKey, payload);
+          else        this.scene.start(sceneKey);
+          console.log('[gameover] scene.start(' + sceneKey + ') called');
         } catch (e) {
           console.error('[gameover] scene.start(' + sceneKey + ') failed', e);
           try { this.scene.start('Menu'); } catch (_) {}
