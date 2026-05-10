@@ -978,6 +978,46 @@ class Player {
     }
   }
 
+  // Temporarily pop the goggles on for a high-energy moment (strong jump,
+  // food / party-item boost). No-op while disco mode is permanently on.
+  // Animated: tiny scale pop + sparkle burst on appear, smooth fade off.
+  flashGoggles(durationMs) {
+    if (this.discoMode) return;
+    const dur = durationMs || 1800;
+    const now = (this.scene.time && this.scene.time.now) || 0;
+    const newUntil = now + dur;
+    // Extend an existing flash window if a stronger boost arrives.
+    if (newUntil <= (this._goggleFlashUntil || 0)) return;
+    this._goggleFlashUntil = newUntil;
+    this.scene.tweens.killTweensOf(this.glasses);
+    // Tiny scale pop synced with the alpha rise — feels satisfying.
+    this.glasses.setScale(0.6);
+    this.scene.tweens.add({
+      targets: this.glasses,
+      alpha: 1,
+      scale: 1,
+      duration: 180,
+      ease: 'Back.easeOut'
+    });
+    // Sparkle burst around the head if the scene's emitter is available.
+    if (this.scene.sparkles && this.container) {
+      this.scene.sparkles.explode(8, this.container.x, this.container.y - 14);
+    }
+    // Schedule the fade-out — only fires if no later boost has extended it.
+    this.scene.time.delayedCall(dur, () => {
+      if (this.discoMode) return;
+      const t = this.scene.time && this.scene.time.now;
+      if (t && t < this._goggleFlashUntil) return; // still hot
+      this.scene.tweens.killTweensOf(this.glasses);
+      this.scene.tweens.add({
+        targets: this.glasses,
+        alpha: 0,
+        duration: 320,
+        ease: 'Sine.easeIn'
+      });
+    });
+  }
+
   draw() {
     const g = this.gfx;
     g.clear();
@@ -3288,6 +3328,7 @@ class GameScene extends Phaser.Scene {
     this.player.coyoteTime = 0;
     this.player.setState && this.player.setState('jump');
     this.player.setMood && this.player.setMood('happy');
+    this.player.flashGoggles && this.player.flashGoggles(2200);
     this.chargedJumpQueued = false;
     this.charging = false;
 
@@ -3501,6 +3542,7 @@ class GameScene extends Phaser.Scene {
     this.player.coyoteTime = 0;
     this.player.setState && this.player.setState('jump');
     this.player.setMood && this.player.setMood('happy');
+    this.player.flashGoggles && this.player.flashGoggles(2400);
     this.chargedJumpQueued = false;
     this.charging = false;
 
@@ -4200,6 +4242,11 @@ class GameScene extends Phaser.Scene {
         if (s >= 0.7) this.sound.play('longjump', { volume: 0.85 });
         else this.sound.play('jump', { volume: 0.75 });
       } catch (e) {}
+    }
+    // Strong charge → cool goggles pop on briefly. No-op while disco is
+    // permanently on (already wearing them).
+    if (s >= 0.7 && this.player.flashGoggles) {
+      this.player.flashGoggles(1500);
     }
   }
 
