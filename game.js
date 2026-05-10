@@ -324,6 +324,37 @@ class BeatManager {
 }
 
 // =================================================================
+// Debug banner — visible on-screen status without needing DevTools.
+// Used to confirm taps register, scene transitions fire, etc.
+// =================================================================
+let _debugBannerEl = null;
+let _debugBannerTimer = 0;
+function _showDebugBanner(msg, bg) {
+  try {
+    if (!_debugBannerEl) {
+      _debugBannerEl = document.createElement('div');
+      _debugBannerEl.id = 'debug-banner';
+      _debugBannerEl.style.cssText = [
+        'position:fixed', 'top:6px', 'left:6px', 'right:6px',
+        'z-index:9999', 'padding:10px 14px', 'border-radius:10px',
+        'font:700 14px Fredoka, system-ui, sans-serif',
+        'color:#fff', 'text-align:center',
+        'box-shadow:0 4px 12px rgba(0,0,0,0.4)',
+        'pointer-events:none', 'word-wrap:break-word'
+      ].join(';');
+      document.body.appendChild(_debugBannerEl);
+    }
+    _debugBannerEl.style.background = bg || '#2a8c3a';
+    _debugBannerEl.textContent = msg;
+    _debugBannerEl.style.display = 'block';
+    if (_debugBannerTimer) clearTimeout(_debugBannerTimer);
+    _debugBannerTimer = setTimeout(() => {
+      if (_debugBannerEl) _debugBannerEl.style.display = 'none';
+    }, 2000);
+  } catch (e) {}
+}
+
+// =================================================================
 // BootScene
 // =================================================================
 class BootScene extends Phaser.Scene {
@@ -2282,7 +2313,14 @@ class DifficultyScene extends Phaser.Scene {
   }
 
   _startGame(diffKey) {
-    if (this._started) return;
+    // Visible on-screen banner so you can confirm the press registered
+    // even without DevTools. Removed automatically after 1.2s or when
+    // the scene transitions.
+    _showDebugBanner('TAP RECEIVED: ' + diffKey.toUpperCase());
+    if (this._started) {
+      _showDebugBanner('LOCKED (_started=true) — refresh page', '#c43838');
+      return;
+    }
     this._started = true;
     AUDIO.playClick();
     console.log('[difficulty] Selected:', diffKey,
@@ -2291,33 +2329,18 @@ class DifficultyScene extends Phaser.Scene {
     p.lastDifficulty = diffKey;
     p.autoRhythm = this._disco;
     saveProgress(p);
-    // Backup timer mirrors GameOverScene.safeStart: guarantees Game launches
-    // even if camerafadeoutcomplete is dropped. Without this, the second
-    // play-through can hang on the fade-out and (in rare cases combined
-    // with a leaked camera listener) bounce the player back to the menu.
-    let _navStarted = false;
-    const _go = () => {
-      if (_navStarted) return;
-      _navStarted = true;
-      console.log('[difficulty] Attempting to start Game scene (diff=' + diffKey + ')');
-      // Note: do NOT use sm.remove/sm.add here. Phaser queues those
-      // operations and they don't execute until the next update tick,
-      // so the immediate scene.start would run against a scene that is
-      // not yet registered, silently doing nothing. The shutdown handler
-      // and init/create resets handle leak prevention instead.
-      try {
-        this.scene.start('Game', { difficulty: diffKey });
-        console.log('[difficulty] scene.start(Game) called');
-      } catch (e) {
-        console.error('[difficulty] scene.start(Game) failed', e);
-        try { this.scene.start('Menu'); } catch (_) {}
-      }
-    };
+    // Direct scene.start — no fade dance. Removing the camera fadeOut
+    // eliminates a whole class of mobile bugs where the fade callback
+    // never fires and the player is stuck staring at a cream screen.
+    console.log('[difficulty] Attempting to start Game scene (diff=' + diffKey + ')');
     try {
-      this.cameras.main.fadeOut(260, 255, 245, 220);
-      this.cameras.main.once('camerafadeoutcomplete', _go);
-    } catch (e) {}
-    try { this.time.delayedCall(340, _go); } catch (e) { _go(); }
+      this.scene.start('Game', { difficulty: diffKey });
+      console.log('[difficulty] scene.start(Game) called');
+    } catch (e) {
+      console.error('[difficulty] scene.start(Game) failed', e);
+      _showDebugBanner('scene.start FAILED: ' + (e && e.message ? e.message : e), '#c43838');
+      try { this.scene.start('Menu'); } catch (_) {}
+    }
   }
 
   _mkDiscoToggle(x, y) {
@@ -3035,6 +3058,7 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
+    _showDebugBanner('GAME LOADING (#' + this._instanceId + ', ' + this.difficulty + ')');
     console.log('[gamescene] Scene create (diff=' + this.difficulty + ', instance #' + this._instanceId + ')',
       '| Active scenes:', this.scene.manager.getScenes(true).map(s => s.scene.key));
     // Strip any stale camera listeners from a prior scene's pending fade so
@@ -3054,8 +3078,10 @@ class GameScene extends Phaser.Scene {
     try {
       this._createInner();
       console.log('[gamescene] Create complete (disco=' + !!this.discoMode + ', diff=' + this.difficulty + ')');
+      _showDebugBanner('GAME READY — TAP TO PLAY');
     } catch (e) {
       console.error('[gamescene] UNEXPECTED REDIRECT — create() crashed, falling back to Menu', e);
+      _showDebugBanner('GAME CRASHED: ' + (e && e.message ? e.message : e), '#c43838');
       try { this.scene.start('Menu'); } catch (_) {}
     }
   }
