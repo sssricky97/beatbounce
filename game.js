@@ -1987,6 +1987,11 @@ class DifficultyScene extends Phaser.Scene {
     // Hard-reset all camera effects so a half-completed fade can't leave
     // this scene blank.
     try { this.cameras.main.resetFX(); } catch (e) {}
+    // Reset camera scroll/zoom so the manual hit-test below works in
+    // pure screen coordinates (a leaked zoom/scroll from a prior scene
+    // would offset where the buttons appear vs where pointer events
+    // think the buttons are).
+    try { this.cameras.main.setScroll(0, 0); this.cameras.main.setZoom(1); } catch (e) {}
     // Defensive: forcibly re-enable the per-scene InputPlugin in case
     // anything (e.g. a leaked mobile gesture, or a prior scene's input
     // shutdown that didn't fully unwind) left it disabled. This is the
@@ -2061,7 +2066,7 @@ class DifficultyScene extends Phaser.Scene {
     });
 
     // BACK to menu
-    this._mkBackButton(w / 2, h * 0.88, 'BACK', () => {
+    const goBack = () => {
       if (this._started) return;
       this._started = true;
       AUDIO.playClick();
@@ -2078,6 +2083,36 @@ class DifficultyScene extends Phaser.Scene {
         this.cameras.main.once('camerafadeoutcomplete', _go);
       } catch (e) {}
       try { this.time.delayedCall(300, _go); } catch (e) { _go(); }
+    };
+    this._mkBackButton(w / 2, h * 0.88, 'BACK', goBack);
+
+    // ROBUST FALLBACK INPUT: a scene-level pointerdown listener that
+    // manually hit-tests against the button rectangles. This bypasses
+    // Phaser's per-object setInteractive plumbing entirely, so even if
+    // the per-button hit zones somehow fail to register (which is what
+    // killed the second-play difficulty buttons before), a tap still
+    // triggers the right action. The per-button zones above still run
+    // their visual press feedback; this just guarantees the ACTION fires.
+    const diffHitH = 82, diffHitHalfW = 145, backHitW = 150, backHitH = 50;
+    this.input.on('pointerdown', (pointer) => {
+      if (this._started) return;
+      const px = pointer.x, py = pointer.y;
+      console.log('[difficulty] Scene pointerdown at:', Math.round(px), Math.round(py));
+      // Difficulty buttons (Easy / Medium / Hard)
+      for (const o of opts) {
+        if (px >= w / 2 - diffHitHalfW && px <= w / 2 + diffHitHalfW &&
+            py >= o.y - diffHitH / 2 && py <= o.y + diffHitH / 2) {
+          console.log('[difficulty] Fallback hit:', o.key);
+          this._startGame(o.key);
+          return;
+        }
+      }
+      // BACK button
+      if (px >= w / 2 - backHitW / 2 && px <= w / 2 + backHitW / 2 &&
+          py >= h * 0.88 - backHitH / 2 && py <= h * 0.88 + backHitH / 2) {
+        console.log('[difficulty] Fallback hit: BACK');
+        goBack();
+      }
     });
 
     // ESC also goes back
@@ -2298,6 +2333,8 @@ class MenuScene extends Phaser.Scene {
     // Hard-reset all camera effects so a half-completed fade from the
     // prior scene can't leave this scene at alpha 0 / blank.
     try { this.cameras.main.resetFX(); } catch (e) {}
+    // Reset camera scroll/zoom so screen coords match world coords.
+    try { this.cameras.main.setScroll(0, 0); this.cameras.main.setZoom(1); } catch (e) {}
     // Defensive: re-enable input in case anything left it disabled.
     try {
       this.input.enabled = true;
