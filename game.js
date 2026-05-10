@@ -2569,6 +2569,16 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
+    try {
+      this._createInner();
+      console.log('[gamescene] Create complete (disco=' + !!this.discoMode + ', diff=' + this.difficulty + ')');
+    } catch (e) {
+      console.error('[gamescene] create() crashed — falling back to Menu', e);
+      try { this.scene.start('Menu'); } catch (_) {}
+    }
+  }
+
+  _createInner() {
     const w = this.scale.width, h = this.scale.height;
     this.gameOver = false;
     this.paused = false;
@@ -2735,6 +2745,18 @@ class GameScene extends Phaser.Scene {
     this._buildUI();
 
     this.cameras.main.fadeIn(350, 255, 245, 220);
+    // Backup: if the fade-in ever stalls (occasional mobile glitch where
+    // the camera fade effect doesn't tick), force the camera back to
+    // clear so the player never gets stuck on a cream/blank screen.
+    this.time.delayedCall(800, () => {
+      try {
+        const cam = this.cameras && this.cameras.main;
+        if (cam && cam.fadeEffect && !cam.fadeEffect.isComplete) {
+          cam.fadeEffect.reset();
+          console.log('[gamescene] Force-cleared stalled fadeIn');
+        }
+      } catch (e) {}
+    });
 
     // First-run-only lore intro: two short lines fade in/out over a few
     // seconds while the player gets ready. Skipped on subsequent runs.
@@ -2798,7 +2820,6 @@ class GameScene extends Phaser.Scene {
         console.log('[pause] Pause menu destroyed');
       } catch (e) {}
     });
-    console.log('[gamescene] Create complete (disco=' + !!this.discoMode + ', diff=' + this.difficulty + ')');
   }
 
   _buildUI() {
