@@ -1987,6 +1987,16 @@ class DifficultyScene extends Phaser.Scene {
     // Hard-reset all camera effects so a half-completed fade can't leave
     // this scene blank.
     try { this.cameras.main.resetFX(); } catch (e) {}
+    // Defensive: forcibly re-enable the per-scene InputPlugin in case
+    // anything (e.g. a leaked mobile gesture, or a prior scene's input
+    // shutdown that didn't fully unwind) left it disabled. This is the
+    // root cause of the "difficulty buttons don't respond on second
+    // play" bug — input was effectively dead until the page was reloaded.
+    try {
+      this.input.enabled = true;
+      // Wake the global InputManager too — `enabled` lives on both.
+      if (this.input.manager) this.input.manager.enabled = true;
+    } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     // Live disco preview: starts from saved value, mutates as user toggles.
     this._disco = !!loadProgress().autoRhythm;
@@ -2220,10 +2230,21 @@ class DifficultyScene extends Phaser.Scene {
     }
     const hit = this.add.zone(0, 0, bw, bh + 12).setInteractive({ useHandCursor: true });
     c.add(hit);
+    // Fire on pointerdown so a dropped mobile pointerup (which is what
+    // killed the difficulty buttons on the second play-through) can no
+    // longer make these buttons unresponsive. The _started latch in
+    // _startGame still prevents a double-fire.
+    let _fired = false;
     hit.on('pointerover', () => { draw(2); this.tweens.add({ targets: c, scale: 1.04, duration: 120 }); });
     hit.on('pointerout',  () => { draw(0); this.tweens.add({ targets: c, scale: 1.0,  duration: 120 }); });
-    hit.on('pointerdown', () => { draw(-3); txt.y = -9; sub.y = 17; });
-    hit.on('pointerup',   () => { draw(0); txt.y = -10; sub.y = 16; onClick(); });
+    hit.on('pointerdown', () => {
+      console.log('[difficulty] Button pressed:', label);
+      draw(-3); txt.y = -9; sub.y = 17;
+      if (_fired) return;
+      _fired = true;
+      onClick();
+    });
+    hit.on('pointerup',   () => { draw(0); txt.y = -10; sub.y = 16; });
     return c;
   }
 
@@ -2249,10 +2270,17 @@ class DifficultyScene extends Phaser.Scene {
     c.add(txt);
     const hit = this.add.zone(0, 0, bw, bh + 10).setInteractive({ useHandCursor: true });
     c.add(hit);
+    let _fired = false;
     hit.on('pointerover', () => { draw(2); this.tweens.add({ targets: c, scale: 1.04, duration: 120 }); });
     hit.on('pointerout',  () => { draw(0); this.tweens.add({ targets: c, scale: 1.0,  duration: 120 }); });
-    hit.on('pointerdown', () => { draw(-2); });
-    hit.on('pointerup',   () => { draw(0); onClick(); });
+    hit.on('pointerdown', () => {
+      console.log('[difficulty] Button pressed:', label);
+      draw(-2);
+      if (_fired) return;
+      _fired = true;
+      onClick();
+    });
+    hit.on('pointerup',   () => { draw(0); });
     return c;
   }
 }
@@ -2270,6 +2298,11 @@ class MenuScene extends Phaser.Scene {
     // Hard-reset all camera effects so a half-completed fade from the
     // prior scene can't leave this scene at alpha 0 / blank.
     try { this.cameras.main.resetFX(); } catch (e) {}
+    // Defensive: re-enable input in case anything left it disabled.
+    try {
+      this.input.enabled = true;
+      if (this.input.manager) this.input.manager.enabled = true;
+    } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     this._bg = buildSkyBackground(this);
 
@@ -2498,6 +2531,9 @@ class MenuScene extends Phaser.Scene {
 
     const hit = this.add.zone(0, 0, bw, bh + 12).setInteractive({ useHandCursor: true });
     c.add(hit);
+    // Fire on pointerdown (with a one-shot _fired latch) so a dropped
+    // mobile pointerup can never make the menu buttons unresponsive.
+    let _fired = false;
     hit.on('pointerover', () => {
       this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
       this.tweens.add({ targets: c, scaleX: 1.06, scaleY: 1.06, duration: 160, ease: 'Sine.easeOut' });
@@ -2507,9 +2543,13 @@ class MenuScene extends Phaser.Scene {
       this.tweens.add({ targets: c, scaleX: 1.0, scaleY: 1.0, duration: 160, ease: 'Sine.easeOut' });
     });
     hit.on('pointerdown', () => {
+      console.log('[menu] Button pressed:', label);
       // Squish: wider + shorter for a candy-press feel.
       this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
       this.tweens.add({ targets: c, scaleX: 1.10, scaleY: 0.90, duration: 90, ease: 'Sine.easeOut' });
+      if (_fired) return;
+      _fired = true;
+      onClick();
     });
     hit.on('pointerup', () => {
       // Pop back from the squish to a slight hover overshoot.
@@ -2519,7 +2559,6 @@ class MenuScene extends Phaser.Scene {
         scaleX: 1.06, scaleY: 1.06,
         duration: 220, ease: 'Back.easeOut'
       });
-      onClick();
     });
     return c;
   }
