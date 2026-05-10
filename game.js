@@ -3081,12 +3081,16 @@ class GameScene extends Phaser.Scene {
       _showDebugBanner('GAME READY — TAP TO PLAY');
     } catch (e) {
       console.error('[gamescene] UNEXPECTED REDIRECT — create() crashed, falling back to Menu', e);
-      _showDebugBanner('GAME CRASHED: ' + (e && e.message ? e.message : e), '#c43838');
+      const stage = this._lastCreateStage || '?';
+      _showDebugBanner('CRASH @ ' + stage + ': ' + (e && e.message ? e.message : e), '#c43838');
       try { this.scene.start('Menu'); } catch (_) {}
     }
   }
 
   _createInner() {
+    // Stage marker so the crash banner can report exactly which step
+    // of _createInner threw. Reset to 'start' here; updated as we go.
+    this._lastCreateStage = 'start';
     const w = this.scale.width, h = this.scale.height;
     this.gameOver = false;
     this.paused = false;
@@ -3124,15 +3128,18 @@ class GameScene extends Phaser.Scene {
     this.perfectCount = 0;
 
     // World camera
+    this._lastCreateStage = 'sky-bg';
     this.cameras.main.setBackgroundColor(0xb8e1ff);
     this.bg = buildSkyBackground(this);
 
     // Beat pulse ring (visual)
+    this._lastCreateStage = 'beat-ring';
     this.beatRing = this.add.graphics();
     this.beatRing.setScrollFactor(0);
     this.beatRing.setDepth(-100);
 
     // Power systems
+    this._lastCreateStage = 'particles';
     this.cloudPuffs = this.add.particles(0, 0, 'puff', {
       lifespan: 600,
       speed: { min: 60, max: 180 },
@@ -3162,16 +3169,19 @@ class GameScene extends Phaser.Scene {
     }).setDepth(70);
 
     // Player
+    this._lastCreateStage = 'player';
     this.player = new Player(this, PLAYER_X, GAME_H - 200);
     this.player.gravity = DIFFICULTY[this.difficulty].gravity;
 
     // Platform manager
+    this._lastCreateStage = 'platforms';
     this.platformManager = new PlatformManager(this, this.difficulty);
     this.platformManager.spawnInitial(GAME_H - 140);
     // start the player on the initial platform
     this.player.y = GAME_H - 200;
 
     // Beat manager
+    this._lastCreateStage = 'beat-mgr';
     this.beat = new BeatManager(this, BPM);
     this.beat.onBeat(() => this._onBeat());
     this.beat.start();
@@ -3192,6 +3202,7 @@ class GameScene extends Phaser.Scene {
     this.queuedAuto = false;
     this.queuedAt = 0;
 
+    this._lastCreateStage = 'input';
     this.input.on('pointerdown', (p, currentlyOver) => {
       if (currentlyOver && currentlyOver.length > 0) return;
       this._onDown(p);
@@ -3219,19 +3230,25 @@ class GameScene extends Phaser.Scene {
     this.giantJumpsLeft = 0;
 
     // Auto Rhythm Mode state (loaded from progress)
+    this._lastCreateStage = 'mode-state';
     const __progress = loadProgress();
     this.discoMode = !!__progress.autoRhythm;
     this._musicMuted = !!__progress.musicMuted;
     this.queuedAuto = false;
     // Instant snap on scene boot so the player never appears with
     // half-faded glasses at the start of a run.
+    this._lastCreateStage = 'player.setDiscoMode';
     this.player.setDiscoMode(this.discoMode, /* instant */ true);
+    this._lastCreateStage = 'apply-disco-bg';
     applyDiscoToBackground(this.bg, this.discoMode, true);
+    this._lastCreateStage = 'platform-disco';
     if (this.platformManager) this.platformManager.setDiscoStyle(this.discoMode);
     // Kick off whichever background track matches the current mode.
+    this._lastCreateStage = 'sync-bg-music';
     this._syncBgMusic();
 
     // Disco overlays (always present; alpha controlled by mode)
+    this._lastCreateStage = 'build-disco-layer';
     this._buildDiscoLayer();
 
     // Day-phase sweat drips for the character — tiny blue puffs that fall
@@ -3252,7 +3269,9 @@ class GameScene extends Phaser.Scene {
     this._floats = [];
 
     // Build UI (in same scene, simpler)
+    this._lastCreateStage = 'build-ui';
     this._buildUI();
+    this._lastCreateStage = 'done';
 
     this.cameras.main.fadeIn(350, 255, 245, 220);
     // Backup: if the fade-in ever stalls (occasional mobile glitch where
