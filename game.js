@@ -962,15 +962,22 @@ class Player {
     g.fillRect(7, -10, 5, 3);
   }
 
-  setDiscoMode(on) {
+  setDiscoMode(on, instant = false) {
     if (this.discoMode === on) return;
     this.discoMode = on;
-    this.scene.tweens.add({
-      targets: this.glasses,
-      alpha: on ? 1 : 0,
-      duration: 280,
-      ease: 'Sine.easeOut'
-    });
+    if (instant) {
+      // Menu / scene-entry path: snap glasses to final alpha so the player
+      // never sees a half-faded character on the start screen.
+      this.scene.tweens.killTweensOf(this.glasses);
+      this.glasses.alpha = on ? 1 : 0;
+    } else {
+      this.scene.tweens.add({
+        targets: this.glasses,
+        alpha: on ? 1 : 0,
+        duration: 280,
+        ease: 'Sine.easeOut'
+      });
+    }
     if (!on && this.arms) {
       this.scene.tweens.killTweensOf(this.arms);
       this.arms.alpha = 0;
@@ -1971,11 +1978,15 @@ class PlatformManager {
 class DifficultyScene extends Phaser.Scene {
   constructor() { super('Difficulty'); }
   create() {
-    console.log('[difficulty] Scene create');
+    console.log('[difficulty] Scene create | Active scenes:',
+      this.scene.manager.getScenes(true).map(s => s.scene.key));
     // Strip any stale camera listeners from a prior scene's pending fade so
     // a leftover handler can't fire on this scene and force an unintended
     // scene.start back to Menu.
     try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
+    // Hard-reset all camera effects so a half-completed fade can't leave
+    // this scene blank.
+    try { this.cameras.main.resetFX(); } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     // Live disco preview: starts from saved value, mutates as user toggles.
     this._disco = !!loadProgress().autoRhythm;
@@ -2249,12 +2260,16 @@ class DifficultyScene extends Phaser.Scene {
 class MenuScene extends Phaser.Scene {
   constructor() { super('Menu'); }
   create() {
-    console.log('[menu] Scene create');
+    console.log('[menu] Scene create | Active scenes:',
+      this.scene.manager.getScenes(true).map(s => s.scene.key));
     // Strip any stale camera listeners that may have leaked from a prior
     // scene's pending fade callback. Without this, a leftover
     // camerafadeoutcomplete handler can fire on this scene and trigger an
     // unintended scene.start, sending the player to the wrong place.
     try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
+    // Hard-reset all camera effects so a half-completed fade from the
+    // prior scene can't leave this scene at alpha 0 / blank.
+    try { this.cameras.main.resetFX(); } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     this._bg = buildSkyBackground(this);
 
@@ -2589,7 +2604,7 @@ class MenuScene extends Phaser.Scene {
   // the disco backdrop image with a smooth alpha cross-fade.
   _applyMenuMode(on, instant = false) {
     this._discoOn = !!on;
-    if (this.demoPlayer) this.demoPlayer.setDiscoMode(this._discoOn);
+    if (this.demoPlayer) this.demoPlayer.setDiscoMode(this._discoOn, instant);
     if (this._bg) applyDiscoToBackground(this._bg, this._discoOn, /* hideClouds */ true);
     if (this._demoCloud) this._demoCloud.setVisible(!this._discoOn);
     if (this.discoBackdropImg) {
@@ -2691,11 +2706,22 @@ class GameScene extends Phaser.Scene {
   }
 
   create() {
-    console.log('[gamescene] Scene create (diff=' + this.difficulty + ')');
+    console.log('[gamescene] Scene create (diff=' + this.difficulty + ', instance #' + this._instanceId + ')',
+      '| Active scenes:', this.scene.manager.getScenes(true).map(s => s.scene.key));
     // Strip any stale camera listeners from a prior scene's pending fade so
     // a leftover camerafadeoutcomplete handler can't trigger an unintended
     // scene.start call here.
     try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
+    try { this.cameras.main.off('camerafadeincomplete'); } catch (e) {}
+    // Hard-reset camera FX so a half-completed fade from a prior run can't
+    // leave the camera stuck at alpha 0 / cream-blank when we re-enter.
+    try { this.cameras.main.resetFX(); } catch (e) {}
+    // Defensive: kill anything that might have leaked from a prior run on
+    // this same scene instance (Phaser reuses scene instances by default,
+    // so leaked tweens / time events can survive a normal shutdown if the
+    // shutdown handler ever threw).
+    try { this.tweens.killAll(); } catch (e) {}
+    try { this.time.removeAllEvents(); } catch (e) {}
     try {
       this._createInner();
       console.log('[gamescene] Create complete (disco=' + !!this.discoMode + ', diff=' + this.difficulty + ')');
@@ -2842,7 +2868,9 @@ class GameScene extends Phaser.Scene {
     this.discoMode = !!__progress.autoRhythm;
     this._musicMuted = !!__progress.musicMuted;
     this.queuedAuto = false;
-    this.player.setDiscoMode(this.discoMode);
+    // Instant snap on scene boot so the player never appears with
+    // half-faded glasses at the start of a run.
+    this.player.setDiscoMode(this.discoMode, /* instant */ true);
     applyDiscoToBackground(this.bg, this.discoMode, true);
     if (this.platformManager) this.platformManager.setDiscoStyle(this.discoMode);
     // Kick off whichever background track matches the current mode.
@@ -4890,9 +4918,12 @@ class GameOverScene extends Phaser.Scene {
   constructor() { super('GameOver'); }
   init(data) { this.results = data; }
   create() {
-    console.log('[gameover] Scene create');
+    console.log('[gameover] Scene create | Active scenes:',
+      this.scene.manager.getScenes(true).map(s => s.scene.key));
     // Strip stale camera listeners from the previous scene's pending fade.
     try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
+    // Hard-reset camera FX so a half-completed fade can't leave us blank.
+    try { this.cameras.main.resetFX(); } catch (e) {}
     const w = this.scale.width, h = this.scale.height;
     const bg = buildSkyBackground(this);
     applyDiscoToBackground(bg, !!loadProgress().autoRhythm);
