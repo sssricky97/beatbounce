@@ -2135,11 +2135,149 @@ class DifficultyScene extends Phaser.Scene {
       }
     });
 
+    // NATIVE DOM FALLBACK: register touch / mousedown directly on the
+    // game canvas. This bypasses Phaser's input plumbing entirely. If
+    // Phaser's per-scene InputPlugin is somehow dead on the second
+    // visit (which is what's been blocking the difficulty buttons), the
+    // browser still dispatches touch events to the canvas DOM element,
+    // so the buttons remain usable. Coords are converted from CSS pixels
+    // to game-space via the canvas bounding rect — same math Phaser uses
+    // internally, but resilient to any Phaser input-state corruption.
+    const canvas = this.game.canvas;
+    const gameW = this.scale.width, gameH = this.scale.height;
+    const _domHandler = (e) => {
+      if (this._started) return;
+      const t = (e.touches && e.touches[0]) ||
+                (e.changedTouches && e.changedTouches[0]) || e;
+      const cx = t.clientX, cy = t.clientY;
+      if (cx == null || cy == null) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const px = (cx - rect.left) * (gameW / rect.width);
+      const py = (cy - rect.top)  * (gameH / rect.height);
+      console.log('[difficulty] DOM event at:', Math.round(px), Math.round(py));
+      for (const o of opts) {
+        if (px >= w / 2 - diffHitHalfW && px <= w / 2 + diffHitHalfW &&
+            py >= o.y - diffHitH / 2 && py <= o.y + diffHitH / 2) {
+          console.log('[difficulty] DOM fallback hit:', o.key);
+          this._startGame(o.key);
+          return;
+        }
+      }
+      if (px >= w / 2 - backHitW / 2 && px <= w / 2 + backHitW / 2 &&
+          py >= h * 0.88 - backHitH / 2 && py <= h * 0.88 + backHitH / 2) {
+        console.log('[difficulty] DOM fallback hit: BACK');
+        goBack();
+      }
+    };
+    if (canvas) {
+      canvas.addEventListener('touchstart', _domHandler, { passive: true });
+      canvas.addEventListener('mousedown', _domHandler);
+      this.events.once('shutdown', () => {
+        try { canvas.removeEventListener('touchstart', _domHandler); } catch (_) {}
+        try { canvas.removeEventListener('mousedown', _domHandler); } catch (_) {}
+      });
+    }
+
+    // GUARANTEED INPUT: transparent HTML <button>s positioned over the
+    // Phaser visuals. HTML buttons are native browser elements and fire
+    // touch / click events independently of Phaser's input system, so
+    // even if Phaser's input is completely dead on the second visit
+    // (the actual mobile bug), these buttons still work. The Phaser
+    // graphics underneath provide the visual press feedback.
+    this._buildHtmlOverlayButtons(opts, w, h, diffHitH, diffHitHalfW, backHitW, backHitH, goBack);
+
     // ESC also goes back
     this.input.keyboard.once('keydown-ESC', () => {
       if (this._started) return;
       this._started = true;
       this.scene.start('Menu');
+    });
+  }
+
+  // Builds transparent HTML <button> overlays for each difficulty + BACK.
+  // They sit absolutely positioned in the document, mapped from game-space
+  // coords to screen-space via the canvas bounding rect, kept in sync with
+  // any canvas resize, and removed on scene shutdown.
+  _buildHtmlOverlayButtons(opts, w, h, diffHitH, diffHitHalfW, backHitW, backHitH, goBack) {
+    const canvas = this.game.canvas;
+    if (!canvas) return;
+    const wrap = canvas.parentElement || document.body;
+    // Use a host element layered ABOVE the canvas. Inherits the canvas's
+    // own positioning (which Phaser keeps stable on resize).
+    const host = document.createElement('div');
+    host.id = 'difficulty-overlay';
+    host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:50;';
+    document.body.appendChild(host);
+    this._htmlOverlayHost = host;
+
+    // Render a single transparent button at game-space (gx, gy) with
+    // hit half-width/half-height. Position is computed live from the
+    // canvas rect so it survives resizes / address-bar reflows.
+    const buttons = [];
+    const mkBtn = (gx, gy, gw, gh, label, action) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label; // hidden visually but helps a11y / debug
+      b.setAttribute('aria-label', label);
+      b.style.cssText = [
+        'position:absolute',
+        'background:transparent',
+        'border:none',
+        'outline:none',
+        'cursor:pointer',
+        'padding:0',
+        'margin:0',
+        'font-size:0',
+        'color:transparent',
+        '-webkit-tap-highlight-color:rgba(0,0,0,0)',
+        'touch-action:manipulation',
+        'pointer-events:auto'
+      ].join(';');
+      const fire = (e) => {
+        if (e) { e.preventDefault(); e.stopPropagation(); }
+        if (this._started) return;
+        console.log('[difficulty] HTML overlay button fired:', label);
+        action();
+      };
+      b.addEventListener('click', fire);
+      b.addEventListener('touchstart', fire, { passive: false });
+      buttons.push({ el: b, gx, gy, gw, gh });
+      host.appendChild(b);
+    };
+
+    opts.forEach(o => {
+      mkBtn(w / 2, o.y, diffHitHalfW * 2, diffHitH, o.key.toUpperCase(),
+        () => this._startGame(o.key));
+    });
+    mkBtn(w / 2, h * 0.88, backHitW, backHitH, 'BACK', goBack);
+
+    // Sync overlay positions to the live canvas rect.
+    const sync = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return;
+      const sx = rect.width / w, sy = rect.height / h;
+      buttons.forEach(({ el, gx, gy, gw, gh }) => {
+        el.style.left   = (rect.left + (gx - gw / 2) * sx) + 'px';
+        el.style.top    = (rect.top  + (gy - gh / 2) * sy) + 'px';
+        el.style.width  = (gw * sx) + 'px';
+        el.style.height = (gh * sy) + 'px';
+      });
+    };
+    sync();
+    // Re-sync on any layout change (resize, orientation, address-bar reflow).
+    window.addEventListener('resize', sync);
+    window.addEventListener('orientationchange', sync);
+    // One more sync after a tick — accounts for late layout shifts on mobile.
+    setTimeout(sync, 80);
+    setTimeout(sync, 320);
+
+    // Cleanup on shutdown so the overlay never lingers into the next scene.
+    this.events.once('shutdown', () => {
+      try { window.removeEventListener('resize', sync); } catch (_) {}
+      try { window.removeEventListener('orientationchange', sync); } catch (_) {}
+      try { if (host && host.parentNode) host.parentNode.removeChild(host); } catch (_) {}
+      this._htmlOverlayHost = null;
     });
   }
 
