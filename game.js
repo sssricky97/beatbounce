@@ -970,13 +970,33 @@ class Player {
       // never sees a half-faded character on the start screen.
       this.scene.tweens.killTweensOf(this.glasses);
       this.glasses.alpha = on ? 1 : 0;
+      this.glasses.setScale(1);
     } else {
-      this.scene.tweens.add({
-        targets: this.glasses,
-        alpha: on ? 1 : 0,
-        duration: 280,
-        ease: 'Sine.easeOut'
-      });
+      this.scene.tweens.killTweensOf(this.glasses);
+      if (on) {
+        // Pop-in: scale from small + alpha from 0, with a Back ease for
+        // a satisfying "snap on" feel. Adds a tiny shine so the goggles
+        // read as a transformation, not just a fade.
+        this.glasses.setScale(0.5);
+        this.glasses.alpha = 0;
+        this.scene.tweens.add({
+          targets: this.glasses,
+          alpha: 1,
+          scale: 1,
+          duration: 360,
+          ease: 'Back.easeOut'
+        });
+      } else {
+        // Pop-out: shrink slightly while fading.
+        this.scene.tweens.add({
+          targets: this.glasses,
+          alpha: 0,
+          scale: 0.85,
+          duration: 240,
+          ease: 'Sine.easeIn',
+          onComplete: () => { this.glasses.setScale(1); }
+        });
+      }
     }
     if (!on && this.arms) {
       this.scene.tweens.killTweensOf(this.arms);
@@ -2360,6 +2380,18 @@ class MenuScene extends Phaser.Scene {
 
     // bouncing character demo (wears glasses if disco mode is saved on)
     this.demo = this.add.container(w / 2, h * 0.55);
+    // Persistent glow ring behind the character — always visible, but
+    // soft & cream in NORMAL mode and bright neon in DISCO. Lives BELOW
+    // the player in the demo container so the character renders in front.
+    this._menuAura = this.add.graphics();
+    this.demo.add(this._menuAura);
+    // Soft pulsing glow so the character feels alive even when idle.
+    this.tweens.add({
+      targets: this._menuAura,
+      scale: { from: 0.94, to: 1.10 },
+      yoyo: true, repeat: -1,
+      duration: 1300, ease: 'Sine.easeInOut'
+    });
     this.demoPlayer = new Player(this, 0, 0);
     this.demo.add(this.demoPlayer.container);
     this.tweens.add({
@@ -2368,6 +2400,20 @@ class MenuScene extends Phaser.Scene {
       yoyo: true, repeat: -1,
       duration: 600, ease: 'Sine.easeInOut'
     });
+    // Ambient sparkle particles around the character — light dust in
+    // NORMAL mode, neon disco confetti in DISCO mode. Tinted live by
+    // _drawMenuAura when mode toggles.
+    this._menuSparkles = this.add.particles(w / 2, h * 0.55, 'sparkle', {
+      lifespan: 1100,
+      speed: { min: 18, max: 60 },
+      scale: { start: 0.85, end: 0 },
+      alpha: { start: 0.9, end: 0 },
+      blendMode: 'ADD',
+      frequency: 280,
+      quantity: 1,
+      tint: [0xffffff, 0xffd95a, 0xff7aa8],
+      emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, 50) }
+    }).setDepth(46);
     // tiny cloud under demo
     this._demoCloud = makeCloud(this, w / 2, h * 0.62, 1.1, true);
     this._demoCloud.setDepth(45);
@@ -2671,6 +2717,38 @@ class MenuScene extends Phaser.Scene {
     return c;
   }
 
+  // Soft persistent glow ring behind the menu character. Cream halo in
+  // NORMAL mode (peaceful cloud vibe), neon multi-ring in DISCO mode
+  // (party vibe). Called from _applyMenuMode whenever mode changes.
+  _drawMenuAura(disco) {
+    if (!this._menuAura) return;
+    const g = this._menuAura;
+    g.clear();
+    if (disco) {
+      // Layered neon rings — outer cool, inner warm, plus a bright core.
+      g.fillStyle(0xb582ff, 0.18);
+      g.fillCircle(0, 0, 70);
+      g.fillStyle(0xff6bd6, 0.22);
+      g.fillCircle(0, 0, 56);
+      g.fillStyle(0x6dd0ff, 0.20);
+      g.fillCircle(0, 0, 44);
+      g.fillStyle(0xfff4d8, 0.30);
+      g.fillCircle(0, 0, 32);
+      g.lineStyle(3, 0xff6bd6, 0.65);
+      g.strokeCircle(0, 0, 50);
+      g.lineStyle(2, 0x6deeda, 0.55);
+      g.strokeCircle(0, 0, 60);
+    } else {
+      // Soft cream halo — single dreamy glow layer.
+      g.fillStyle(0xfff4d8, 0.22);
+      g.fillCircle(0, 0, 58);
+      g.fillStyle(0xffffff, 0.18);
+      g.fillCircle(0, 0, 44);
+      g.lineStyle(2, 0xffffff, 0.35);
+      g.strokeCircle(0, 0, 50);
+    }
+  }
+
   // Live menu mode swap — re-skins demo character, sky, and adds/removes
   // the disco backdrop image with a smooth alpha cross-fade.
   _applyMenuMode(on, instant = false) {
@@ -2678,6 +2756,48 @@ class MenuScene extends Phaser.Scene {
     if (this.demoPlayer) this.demoPlayer.setDiscoMode(this._discoOn, instant);
     if (this._bg) applyDiscoToBackground(this._bg, this._discoOn, /* hideClouds */ true);
     if (this._demoCloud) this._demoCloud.setVisible(!this._discoOn);
+    // Re-skin the persistent glow ring behind the character.
+    this._drawMenuAura(this._discoOn);
+    // Re-tint the ambient sparkle stream so disco gets neon confetti.
+    if (this._menuSparkles) {
+      this._menuSparkles.setParticleTint(this._discoOn
+        ? [0xff6bd6, 0x6deeda, 0xb582ff, 0xffd95a]
+        : [0xffffff, 0xffd95a, 0xff7aa8]);
+      // Disco mode emits a bit faster for that party-energy feel.
+      this._menuSparkles.frequency = this._discoOn ? 160 : 280;
+    }
+    // Satisfying transformation: tiny pop on the character + sparkle
+    // burst, only on user-driven toggles (not on initial scene render).
+    if (!instant && this.demo) {
+      this.tweens.killTweensOf(this.demo);
+      this.tweens.add({
+        targets: this.demo,
+        scale: { from: 1.18, to: 1.0 },
+        duration: 380, ease: 'Back.easeOut'
+      });
+      if (this._menuSparkles && this._menuSparkles.explode) {
+        this._menuSparkles.explode(this._discoOn ? 22 : 12, 0, 0);
+      }
+      // Re-trigger the aura's idle pulse with a quick punch-in.
+      if (this._menuAura) {
+        this.tweens.killTweensOf(this._menuAura);
+        this._menuAura.setScale(1.25);
+        this.tweens.add({
+          targets: this._menuAura,
+          scale: 1.0,
+          duration: 320, ease: 'Back.easeOut',
+          onComplete: () => {
+            // Restart the ambient pulse loop.
+            this.tweens.add({
+              targets: this._menuAura,
+              scale: { from: 0.94, to: 1.10 },
+              yoyo: true, repeat: -1,
+              duration: 1300, ease: 'Sine.easeInOut'
+            });
+          }
+        });
+      }
+    }
     if (this.discoBackdropImg) {
       const targetA = this._discoOn ? 0.55 : 0;
       if (instant) {
