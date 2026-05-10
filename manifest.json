@@ -1,0 +1,19 @@
+{
+  "name": "Hugging Pop",
+  "short_name": "Hugging Pop",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "portrait",
+  "background_color": "#1a1330",
+  "theme_color": "#1a1330",
+  "icons": [
+    {
+      "src": "images/disco/item3.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

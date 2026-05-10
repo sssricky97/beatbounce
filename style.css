@@ -8,23 +8,39 @@
 }
 
 html, body {
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  /* 100dvh tracks the actual visible area on mobile (excludes the
+     dynamic browser chrome). Falls back to 100vh on older browsers. */
+  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
-  background: #b8e1ff;
+  background: #1a1330;
   color: #2a2440;
   font-family: 'Fredoka', system-ui, sans-serif;
   touch-action: manipulation;
   overscroll-behavior: none;
+  /* Stop iOS / Android from "pulling" the page when scrolling. */
+  position: fixed;
+  inset: 0;
 }
 
 #game-wrap {
   position: fixed;
   inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, #ffd8a3 0%, #ffb88a 22%, #b8e1ff 60%, #87ceeb 100%);
+  /* Subtle dark gradient — letterbox bars read as cinematic frame
+     instead of mismatched sky. Works for both NORMAL + DISCO modes. */
+  background: radial-gradient(ellipse at center, #2a1a45 0%, #1a1330 70%, #0c0a18 100%);
+  /* Honour iPhone notch / Android edge cutouts. */
+  padding-top: env(safe-area-inset-top, 0);
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  padding-left: env(safe-area-inset-left, 0);
+  padding-right: env(safe-area-inset-right, 0);
 }
 
 #game {
@@ -45,7 +61,8 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, #ffd8a3 0%, #b8e1ff 65%);
+  /* Match the wrap so loader → game transition has no colour pop. */
+  background: radial-gradient(ellipse at center, #2a1a45 0%, #1a1330 70%, #0c0a18 100%);
   transition: opacity 0.5s ease;
 }
 #loader.hidden { opacity: 0; pointer-events: none; }

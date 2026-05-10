@@ -2308,6 +2308,15 @@ class MenuScene extends Phaser.Scene {
       AUDIO.init(); AUDIO.resume();
       // Phaser's WebAudio sound manager needs an unlock from a user gesture
       try { if (this.sound && this.sound.unlock) this.sound.unlock(); } catch (e) {}
+      // Request browser fullscreen — must run inside this user gesture.
+      // No-op on devices that don't support it (silently ignored).
+      try {
+        const el = document.documentElement;
+        if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+          if (el.requestFullscreen)            el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+          else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        }
+      } catch (e) {}
       // Mode-specific PLAY voice clip:
       //   NORMAL → cute "ehehehe" giggle (playNormal)
       //   DISCO  → existing anime-ahh clip (star)
