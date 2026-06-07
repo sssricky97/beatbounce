@@ -3102,6 +3102,22 @@ class GameScene extends Phaser.Scene {
     this._pauseObjs = null;
     this._discoSound = null;
     this._normalSound = null;
+    // Disco state + overlay refs MUST be reset here, before the beat manager
+    // starts. beat.start() fires _onBeat() synchronously, and _onBeat reads
+    // this.discoMode + the disco overlay objects. Those are only re-set later
+    // (mode-state stage) and rebuilt by _buildDiscoLayer (build-disco-layer
+    // stage), so on a reused scene instance they would otherwise still hold
+    // the previous run's leaked mode flag and destroyed overlay objects, so
+    // calling .explode() on a destroyed emitter crashes with a null 'fill'
+    // read. Clear them now so the first synchronous beat is a no-op until
+    // this run rebuilds them.
+    this.discoMode = false;
+    this.discoFlash = null;
+    this.discoColors = null;
+    this.discoNotes = null;
+    this.discoDust = null;
+    this._discoColorIdx = 0;
+    this.discoFlashAlpha = 0;
     // Food powerup state — spawn rules tracked here so they reset cleanly
     // each run. STANDARD MODE ONLY (skipped while discoMode is true).
     this._foodActive = null;
@@ -3357,6 +3373,14 @@ class GameScene extends Phaser.Scene {
           this._pauseObjs = null;
         }
       } catch (e) {}
+      // Drop disco overlay references. Phaser destroys the underlying
+      // display-list objects on shutdown, but these scene-instance fields
+      // keep pointing at the now-destroyed emitters/rectangle. Null them so
+      // a leaked reference can never be touched by the next run's first beat.
+      this.discoFlash = null;
+      this.discoColors = null;
+      this.discoNotes = null;
+      this.discoDust = null;
       // Strip any camera listeners that might still be queued so they
       // can't fire on whichever scene takes over next.
       try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
@@ -3677,6 +3701,9 @@ class GameScene extends Phaser.Scene {
   // (purple → blue → orange → green) and loops endlessly. The sky / cloud
   // / sun / moon system is left alone — this only recolours disco visuals.
   _updateDiscoTheme(meters) {
+    // Disco palette is only present once _buildDiscoLayer has run for this
+    // run. Bail if it hasn't (e.g. a stray early tick) so we never index null.
+    if (!this.discoColors) return;
     const N = DISCO_THEME_NAMES.length;
     const cyclePos = ((meters % DISCO_CYCLE_METERS) + DISCO_CYCLE_METERS) % DISCO_CYCLE_METERS;
     let i = 0;
@@ -4676,7 +4703,7 @@ class GameScene extends Phaser.Scene {
     cam.setZoom(this.discoMode ? 1.018 : 1.012);
     if (this.discoMode) {
       if (this.rhythmBtnContainer) this.rhythmBtnContainer.setScale(1.06);
-      if (this.discoFlash) {
+      if (this.discoFlash && this.discoColors) {
         this._discoColorIdx = ((this._discoColorIdx || 0) + 1) % this.discoColors.length;
         this.discoFlash.fillColor = this.discoColors[this._discoColorIdx];
         this.discoFlashAlpha = 0.18;
