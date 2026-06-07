@@ -1,0 +1,26 @@
+# Node / Capacitor
+node_modules/
+www/
+
+# Generated capacitor copies inside the native project
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+
+# Android build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/captures/
+android/local.properties
+*.apk
+*.aab
+
+# Signing secrets - NEVER commit these
+android/key.properties
+*.keystore
+*.jks
+
+# OS / editor
+.DS_Store
+Thumbs.db

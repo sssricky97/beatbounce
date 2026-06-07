@@ -1,0 +1,12 @@
+# Copy this file to android/key.properties and fill in your real values.
+# android/key.properties is gitignored - it must NEVER be committed.
+#
+# Create the keystore first (run once, keep the .jks file safe and backed up):
+#   keytool -genkey -v -keystore hugging-pop-release.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 -alias hugging-pop
+#
+# storeFile is resolved relative to the android/ directory.
+storeFile=../hugging-pop-release.jks
+storePassword=CHANGE_ME
+keyAlias=hugging-pop
+keyPassword=CHANGE_ME

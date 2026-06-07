@@ -1,0 +1,24 @@
+{
+  "name": "hugging-pop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Hugging Pop - one-button rhythm jumper, Android (Capacitor) wrapper around the web game.",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "sync": "npm run build:web && cap sync android",
+    "open:android": "cap open android",
+    "art": "node scripts/generate-art.mjs",
+    "assets": "capacitor-assets generate --android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/splash-screen": "^7.0.0",
+    "phaser": "3.80.1"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^7.0.0",
+    "sharp": "^0.33.5"
+  }
+}
