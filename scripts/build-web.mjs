@@ -30,6 +30,12 @@ copyFileSync(
   join(www, 'vendor', 'phaser.min.js')
 );
 
+// 4b. Bundle the Fredoka + Caveat fonts locally (assets/fonts.css + the woff2
+//     files), so the app renders identically offline with no Google Fonts call.
+//     Produced by scripts/fetch-fonts.mjs.
+copyFileSync(join(root, 'assets', 'fonts.css'), join(www, 'fonts.css'));
+cpSync(join(root, 'assets', 'fonts'), join(www, 'fonts'), { recursive: true });
+
 // 5. App index.html: identical shell to the web build, but Phaser is loaded
 //    from the vendored file and game.js is referenced statically (no Date.now
 //    cache-buster, since the WebView serves packaged files, not a live server).
@@ -45,9 +51,7 @@ const indexHtml = `<!DOCTYPE html>
 <meta name="mobile-web-app-capable" content="yes" />
 <link rel="manifest" href="manifest.json" />
 <title>Hugging Pop</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts.css" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>

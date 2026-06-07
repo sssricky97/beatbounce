@@ -1,0 +1,27 @@
+# Normalize text files to LF in the repo; let Git convert on checkout per OS.
+* text=auto
+
+# The Gradle wrapper script is executed by /bin/sh and MUST stay LF even on
+# Windows checkouts, or the build breaks on Linux/CI runners.
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Windows batch files must stay CRLF.
+*.bat text eol=crlf
+gradlew.bat text eol=crlf
+
+# Binary assets - never apply line-ending or diff munging.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.mp3 binary
+*.woff2 binary
+*.woff binary
+*.ttf binary
+*.jar binary
+*.keystore binary
+*.jks binary
+*.aab binary
+*.apk binary

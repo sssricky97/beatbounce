@@ -93,3 +93,10 @@ npm run assets                  # regenerate all android densities
 To use your own art instead, drop a 1024x1024 `assets/icon.png` (and optional
 `assets/icon-foreground.png` / `assets/icon-background.png` / `assets/splash.png`)
 and run `npm run assets`.
+
+## Fonts (bundled, offline)
+
+The Fredoka + Caveat fonts are bundled locally (`assets/fonts/*.woff2` +
+`assets/fonts.css`) so the app renders identically with no network. They are
+copied into `www/` by `npm run build:web`. To refresh or change the font set,
+edit and re-run `node scripts/fetch-fonts.mjs`, then `npm run sync`.
