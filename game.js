@@ -2714,7 +2714,7 @@ class MenuScene extends Phaser.Scene {
       const p = loadProgress(); p.muted = m; saveProgress(p);
       this.muteBtn.label.setText(m ? 'SOUND: OFF' : 'SOUND: ON');
       AUDIO.playClick();
-    });
+    }, { repeatable: true });
 
     // best line
     const p = loadProgress();
@@ -2737,7 +2737,7 @@ class MenuScene extends Phaser.Scene {
     this.cameras.main.fadeIn(400, 255, 245, 220);
   }
 
-  _mkButton(x, y, label, color, onClick) {
+  _mkButton(x, y, label, color, onClick, opts = {}) {
     const bw = 244, bh = 64;
     const radius = 26;
     const c = this.add.container(x, y).setDepth(20);
@@ -2786,8 +2786,12 @@ class MenuScene extends Phaser.Scene {
 
     const hit = this.add.zone(0, 0, bw, bh + 12).setInteractive({ useHandCursor: true });
     c.add(hit);
-    // Fire on pointerdown (with a one-shot _fired latch) so a dropped
-    // mobile pointerup can never make the menu buttons unresponsive.
+    // Fire on pointerdown so a dropped mobile pointerup can never make a
+    // button unresponsive. Navigation buttons use a one-shot _fired latch
+    // (they leave the scene, so a single fire is all that's wanted, and it
+    // guards against double-navigation). Repeatable buttons (e.g. the SOUND
+    // toggle, which stays on this scene) skip the latch and rely on their own
+    // onClick debounce, otherwise they would only ever work once.
     let _fired = false;
     hit.on('pointerover', () => {
       this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
@@ -2802,6 +2806,7 @@ class MenuScene extends Phaser.Scene {
       // Squish: wider + shorter for a candy-press feel.
       this.tweens.killTweensOf(c, ['scaleX', 'scaleY']);
       this.tweens.add({ targets: c, scaleX: 1.10, scaleY: 0.90, duration: 90, ease: 'Sine.easeOut' });
+      if (opts.repeatable) { onClick(); return; }
       if (_fired) return;
       _fired = true;
       onClick();
