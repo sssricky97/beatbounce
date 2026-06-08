@@ -4,8 +4,24 @@
    all audio synthesized with Web Audio API.
 */
 
+// Fixed design width: gameplay tuning (platform gaps, player x, drift) is
+// calibrated against this, so it never changes. The height instead tracks the
+// device's real aspect ratio so the FIT canvas fills the whole screen with no
+// black bars on tall phones. GAME_H is "let" because it is recomputed on
+// resize / orientation change; all vertical gameplay logic (death line, camera
+// follow, lookahead, cleanup) reads it live, so the world stays correct.
 const GAME_W = 480;
-const GAME_H = 800;
+
+// Match the canvas aspect to the viewport so Phaser.Scale.FIT adds no letterbox.
+// Clamp keeps tuning sane on near-square / desktop windows (mobile portrait is
+// always taller than the 0.6 design ratio, so it never hits the min there).
+function computeGameHeight() {
+  const vw = window.innerWidth || GAME_W;
+  const vh = window.innerHeight || 800;
+  const h = Math.round(GAME_W * (vh / vw));
+  return Math.max(800, Math.min(1400, h));
+}
+let GAME_H = computeGameHeight();
 const BPM = 90;
 const BEAT_MS = 60000 / BPM; // ~666.67 ms
 const PLAYER_X = GAME_W / 2;
@@ -5476,6 +5492,30 @@ const config = {
 };
 
 const game = new Phaser.Game(config);
+
+// Keep the canvas aspect matched to the live viewport so there are never any
+// black bars: on orientation change / address-bar reflow / foldable resize we
+// recompute GAME_H and resize the Phaser game. FIT then fills the screen, and
+// because all vertical gameplay logic reads GAME_H live, the world adapts too.
+function resizeGameToViewport() {
+  if (!game.scale) return;
+  const h = computeGameHeight();
+  if (h !== GAME_H) {
+    GAME_H = h;
+    game.scale.setGameSize(GAME_W, GAME_H);
+  }
+  // Always re-fit: even when the aspect (GAME_H) is unchanged the viewport's
+  // pixel size may have changed (e.g. switching devices, browser zoom), and FIT
+  // needs to re-measure the parent so the canvas keeps filling the screen.
+  game.scale.refresh();
+}
+window.addEventListener('resize', resizeGameToViewport);
+window.addEventListener('orientationchange', () => {
+  // Orientation reflow lands a frame or two later on mobile; re-check after it.
+  resizeGameToViewport();
+  setTimeout(resizeGameToViewport, 120);
+  setTimeout(resizeGameToViewport, 400);
+});
 
 // Block accidental zoom
 document.addEventListener('gesturestart', e => e.preventDefault());
