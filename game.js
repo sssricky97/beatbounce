@@ -39,8 +39,8 @@ const ACHIEVEMENTS = [
 ];
 
 const DIFFICULTY = {
-  easy:   { gravity: 1700, gapMult: 0.70, rampMult: 0.45, widthMult: 1.20, driftRangeMult: 0.35, driftSpeedMult: 0.55, jumpMult: 1.05, label: 'EASY',   color: 0x9adf7a },
-  medium: { gravity: 2000, gapMult: 1.00, rampMult: 1.00, widthMult: 1.00, driftRangeMult: 1.00, driftSpeedMult: 1.00, jumpMult: 1.00, label: 'MEDIUM', color: 0xffd95a },
+  easy:   { gravity: 1700, gapMult: 0.60, rampMult: 0.60, widthMult: 1.20, driftRangeMult: 0.45, driftSpeedMult: 0.72, jumpMult: 1.05, label: 'EASY',   color: 0x9adf7a },
+  medium: { gravity: 2000, gapMult: 0.85, rampMult: 1.00, widthMult: 1.00, driftRangeMult: 1.00, driftSpeedMult: 1.10, jumpMult: 1.00, label: 'MEDIUM', color: 0xffd95a },
   hard:   { gravity: 2300, gapMult: 1.18, rampMult: 1.50, widthMult: 0.85, driftRangeMult: 1.30, driftSpeedMult: 1.20, jumpMult: 0.96, label: 'HARD',   color: 0xff7aa8 }
 };
 
@@ -741,12 +741,12 @@ function buildSkyBackground(scene, scrollable = true) {
       if (opts.tint != null) cloud.setTint(opts.tint);
       if (Math.random() < 0.5) cloud.setFlipX(true);
       c.add(cloud);
-      // Soft vertical bob.
+      // Soft vertical bob — larger + a touch quicker so it's clearly alive.
       scene.tweens.add({
         targets: cloud,
-        y: cloud.y + 4 + Math.random() * 5,
+        y: cloud.y + 9 + Math.random() * 8,
         yoyo: true, repeat: -1,
-        duration: 3200 + Math.random() * 1600,
+        duration: 2600 + Math.random() * 1400,
         ease: 'Sine.easeInOut',
         delay: Math.random() * 2000
       });
@@ -772,7 +772,7 @@ function buildSkyBackground(scene, scrollable = true) {
     yMin: h * 0.04, yMax: h * 0.42,
     scaleMin: 0.55, scaleMax: 0.85,
     alpha: 0.55, tint: 0xc7d6eb,
-    sway: 10, swayDur: 14000
+    sway: 50, swayDur: 11000
   });
 
   // MID — bigger, soft, the main cloud silhouette.
@@ -781,7 +781,7 @@ function buildSkyBackground(scene, scrollable = true) {
     yMin: h * 0.10, yMax: h * 0.78,
     scaleMin: 0.8, scaleMax: 1.25,
     alpha: 0.82, tint: 0xffffff,
-    sway: 18, swayDur: 10000
+    sway: 80, swayDur: 9000
   });
 
   // Sun + disco ball share a position; one is shown at a time. Sits between
@@ -831,7 +831,7 @@ function buildSkyBackground(scene, scrollable = true) {
     yMin: h * 0.55, yMax: h * 0.95,
     scaleMin: 1.1, scaleMax: 1.6,
     alpha: 0.62, tint: 0xfbe6d4,
-    sway: 28, swayDur: 7000
+    sway: 120, swayDur: 6500
   });
 
   // FRONT MIST — a very faint forward layer ABOVE platforms so the player
@@ -842,7 +842,7 @@ function buildSkyBackground(scene, scrollable = true) {
     yMin: h * 0.20, yMax: h * 0.85,
     scaleMin: 1.4, scaleMax: 2.0,
     alpha: 0.16, tint: 0xffffff,
-    sway: 36, swayDur: 6000
+    sway: 160, swayDur: 5500
   });
 
   // Legacy keys kept for any existing callers — empty containers, no-op.
@@ -1325,6 +1325,32 @@ class Player {
       }
     }
   }
+}
+
+// =================================================================
+// Shared playful icon-button face (visual only): soft drop shadow, a bold
+// cartoon outline, a two-tone sheen for a gradient feel and a glossy highlight
+// so the round HUD buttons pop against the sky. Does not touch input or logic.
+function drawPlayfulCircleBtn(g, r, bodyColor, sheenColor) {
+  g.clear();
+  // soft drop shadow
+  g.fillStyle(0x1c1830, 0.28);
+  g.fillCircle(0, 5, r + 1);
+  // dark base ring sitting under the body (reads as a thick outline)
+  g.fillStyle(0x2a2440, 1);
+  g.fillCircle(0, 0, r + 2);
+  // body
+  g.fillStyle(bodyColor, 1);
+  g.fillCircle(0, 0, r);
+  // upper sheen — lighter toward the top for a gradient feel
+  g.fillStyle(sheenColor, 0.55);
+  g.fillCircle(0, -r * 0.34, r * 0.74);
+  // glossy highlight dot
+  g.fillStyle(0xffffff, 0.72);
+  g.fillCircle(-r * 0.36, -r * 0.42, r * 0.17);
+  // crisp outline
+  g.lineStyle(3, 0x2a2440, 1);
+  g.strokeCircle(0, 0, r);
 }
 
 // =================================================================
@@ -1852,7 +1878,7 @@ class PlatformManager {
   add(p) { this.platforms.push(p); }
 
   spawnNextRow(y) {
-    if (this.platforms.length >= 18) return null;
+    if (this.platforms.length >= 24) return null;
     const elapsed = (this.scene.time.now - this.scene.gameStartTime) / 1000;
     // SAFE-MODE: only bubbles for stability. Variations re-enabled once stable.
     let type = 'pencil';
@@ -1860,7 +1886,24 @@ class PlatformManager {
     const wm = (DIFFICULTY[this.difficulty] || DIFFICULTY.medium).widthMult;
     const minWidth = Math.round(((type === 'cloud' || type === 'fake') ? 90 : 100) * wm);
     const maxWidth = Math.round(((type === 'pencil') ? 130 : 130) * wm);
-    const w = Phaser.Math.Between(minWidth, maxWidth);
+    let w = Phaser.Math.Between(minWidth, maxWidth);
+
+    // Disco mode, Easy/Medium only: once the run is underway (past ~150 m), some
+    // bars spawn randomly smaller so the player has to aim each jump carefully.
+    // Medium shrinks a little more often and a little smaller than Easy. Hard is
+    // left untouched. A floor keeps every bar wide enough to still land on.
+    if (this.scene.discoMode &&
+        (this.difficulty === 'easy' || this.difficulty === 'medium')) {
+      const meters = (this.scene.height || 0) / 10;
+      if (meters > 150) {
+        const isMed = this.difficulty === 'medium';
+        if (Math.random() < (isMed ? 0.40 : 0.28)) {
+          const lo = isMed ? 0.50 : 0.62;
+          const hi = isMed ? 0.72 : 0.80;
+          w = Math.max(46, Math.round(w * Phaser.Math.FloatBetween(lo, hi)));
+        }
+      }
+    }
     let x;
     if (type === 'pencil') {
       // moving balloons swing symmetrically around the player column
@@ -1966,8 +2009,13 @@ class PlatformManager {
   ensureContent(playerY) {
     while (this.highestY > playerY - GAME_H * 1.5) {
       const gap = Phaser.Math.Between(this.gapSpec.min, this.gapSpec.max);
-      this.highestY -= gap;
-      this.spawnNextRow(this.highestY);
+      const nextY = this.highestY - gap;
+      // Only advance the spawn cursor when a bubble is actually placed. If the
+      // platform cap is reached spawnNextRow returns null; advancing highestY
+      // anyway would burn vertical space with no bubble and open a dead void
+      // above the player. Stop instead and let cleanup free a slot next frame.
+      if (!this.spawnNextRow(nextY)) break;
+      this.highestY = nextY;
     }
   }
 
@@ -3402,6 +3450,8 @@ class GameScene extends Phaser.Scene {
       this.discoColors = null;
       this.discoNotes = null;
       this.discoDust = null;
+      // Stop the disco-button glow pulse and drop its reference.
+      if (this._discoPulse) { try { this._discoPulse.stop(); } catch (e) {} this._discoPulse = null; }
       // Strip any camera listeners that might still be queued so they
       // can't fire on whichever scene takes over next.
       try { this.cameras.main.off('camerafadeoutcomplete'); } catch (e) {}
@@ -3449,12 +3499,25 @@ class GameScene extends Phaser.Scene {
       backgroundColor: '#fff4d8', padding: { x: 6, y: 2 }
     }).setOrigin(1, 0).setScrollFactor(0).setDepth(200);
 
-    // pause button
-    this.pauseBtn = this.add.text(w - 18, 50, 'II', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
-      color: '#2a2440', fontStyle: '700'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(200)
-      .setInteractive({ useHandCursor: true });
+    // pause button — bottom point of the 3-button triangle, centered under the
+    // Music + Sound pair. Visual only; the same glyph keeps the same handler.
+    const pauseR = 19;
+    const pauseCx = w - 55, pauseCy = 112;
+    const pauseBg = this.add.graphics().setScrollFactor(0).setDepth(199);
+    pauseBg.x = pauseCx;
+    pauseBg.y = pauseCy;
+    drawPlayfulCircleBtn(pauseBg, pauseR, 0xffd95a, 0xffe9a3);
+    this.pauseBtn = this.add.text(pauseCx, pauseCy, 'II', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '22px',
+      color: '#2a2440', fontStyle: '800'
+    }).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(200);
+    // Generous symmetric tap target around the glyph center.
+    const ptw = this.pauseBtn.width, pth = this.pauseBtn.height;
+    this.pauseBtn.setInteractive(
+      new Phaser.Geom.Rectangle(-12, -14, ptw + 24, pth + 28),
+      Phaser.Geom.Rectangle.Contains
+    );
+    if (this.pauseBtn.input) this.pauseBtn.input.cursor = 'pointer';
     this.pauseBtn.on('pointerdown', () => { AUDIO.playClick(); this._togglePause(); });
 
     // Hold meter ring at bottom center
@@ -3483,16 +3546,17 @@ class GameScene extends Phaser.Scene {
 
   _buildRhythmToggle() {
     const w = this.scale.width, h = this.scale.height;
-    const bw = 150, bh = 38;
-    const cx = w - bw / 2 - 10;
+    const bw = 170, bh = 52;           // taller + wider, easier to read & tap
+    const rad = 18;                    // rounder cartoon corners
+    const cx = w - bw / 2 - 10;        // bottom-right corner, unchanged
     const cy = h - bh / 2 - 14;
     const c = this.add.container(cx, cy).setScrollFactor(0).setDepth(220);
     const glow = this.add.graphics();
     const bg = this.add.graphics();
     c.add([glow, bg]);
-    const txt = this.add.text(0, 0, '', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '13px',
-      color: '#2a2440', fontStyle: '700'
+    const txt = this.add.text(0, -1, '', {
+      fontFamily: 'Fredoka, sans-serif', fontSize: '18px',
+      color: '#2a2440', fontStyle: '800'
     }).setOrigin(0.5);
     c.add(txt);
 
@@ -3500,27 +3564,54 @@ class GameScene extends Phaser.Scene {
       const on = this.discoMode;
       glow.clear();
       bg.clear();
+      // soft colorful halo (a few rings of fading alpha) when enabled
       if (on) {
-        glow.fillStyle(0xb582ff, 0.35);
-        glow.fillRoundedRect(-bw / 2 - 6, -bh / 2 - 6, bw + 12, bh + 12, 14);
+        glow.fillStyle(0xff6bd6, 0.18);
+        glow.fillRoundedRect(-bw / 2 - 12, -bh / 2 - 12, bw + 24, bh + 24, rad + 8);
+        glow.fillStyle(0xb582ff, 0.30);
+        glow.fillRoundedRect(-bw / 2 - 6, -bh / 2 - 6, bw + 12, bh + 12, rad + 4);
       }
+      // drop shadow
+      bg.fillStyle(0x1c1830, 0.30);
+      bg.fillRoundedRect(-bw / 2 + 2, -bh / 2 + 6, bw, bh, rad);
+      // dark outline base
       bg.fillStyle(0x2a2440, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2 + 3, bw, bh, 12);
-      bg.fillStyle(on ? 0xb582ff : 0xd8d4e8, 1);
-      bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, 12);
-      bg.lineStyle(2.5, 0x2a2440, 1);
-      bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, 12);
+      bg.fillRoundedRect(-bw / 2 - 2, -bh / 2 - 2, bw + 4, bh + 4, rad + 1);
+      // body
+      bg.fillStyle(on ? 0xc06bff : 0xd8d4e8, 1);
+      bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh, rad);
+      // upper sheen for a gradient feel
+      bg.fillStyle(on ? 0xe0a8ff : 0xefecf7, 0.55);
+      bg.fillRoundedRect(-bw / 2, -bh / 2, bw, bh * 0.5, rad);
+      // crisp outline
+      bg.lineStyle(3, 0x2a2440, 1);
+      bg.strokeRoundedRect(-bw / 2, -bh / 2, bw, bh, rad);
       txt.setText(on ? 'DISCO: ON' : 'DISCO: OFF');
       txt.setColor(on ? '#fff4d8' : '#2a2440');
+
+      // Gentle glow pulse while enabled; stop and reset when disabled.
+      if (on) {
+        if (!this._discoPulse) {
+          glow.setAlpha(1);
+          this._discoPulse = this.tweens.add({
+            targets: glow, alpha: { from: 1, to: 0.35 },
+            duration: 650, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+          });
+        }
+      } else if (this._discoPulse) {
+        this._discoPulse.stop();
+        this._discoPulse = null;
+        glow.setAlpha(1);
+      }
     };
     draw();
 
-    const hit = this.add.zone(0, 0, bw + 10, bh + 12).setInteractive({ useHandCursor: true });
+    const hit = this.add.zone(0, 0, bw + 24, bh + 26).setInteractive({ useHandCursor: true });
     c.add(hit);
     // equalizer bars inside the button (visible only when ON)
     const eqBars = [];
     for (let i = 0; i < 4; i++) {
-      const bar = this.add.rectangle(bw / 2 - 12 - i * 7, 0, 4, 16, 0xfff4d8)
+      const bar = this.add.rectangle(bw / 2 - 16 - i * 9, 0, 5, 24, 0xfff4d8)
         .setOrigin(0.5, 0.5).setVisible(false);
       c.add(bar);
       eqBars.push(bar);
@@ -3567,42 +3658,50 @@ class GameScene extends Phaser.Scene {
     this.rhythmBtnDraw = draw;
     this.rhythmBtnGlow = glow;
     this.rhythmBtnContainer = c;
+
+    // Mode reminder: show the button for the first 5 seconds of a run so the
+    // player sees which mode they're in, then gently fade it out to declutter
+    // the screen. Uses a delayed tween so it pauses/resumes with the game and
+    // counts only real play time. Visual only — the toggle action is unchanged.
+    this._rhythmHideTween = this.tweens.add({
+      targets: c,
+      alpha: { from: 1, to: 0 },
+      delay: 5000,
+      duration: 700,
+      ease: 'Sine.easeIn',
+      onComplete: () => { if (c && c.scene) c.setVisible(false); }
+    });
   }
 
   _buildMusicToggle() {
     const w = this.scale.width;
     // Round icon-style button at top-right, sitting just left of the pause
     // button. Uses 🔊 / 🔇 glyphs so the state is recognisable instantly.
-    const r = 18;
-    const cx = w - 60;
-    const cy = 50 + r;
+    const r = 19;            // compact; top-right of the 3-button triangle
+    const cx = w - 32;
+    const cy = 70;
     const c = this.add.container(cx, cy).setScrollFactor(0).setDepth(220);
     const bg = this.add.graphics();
     c.add(bg);
     const icon = this.add.text(0, 1, '', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
+      fontFamily: 'Fredoka, sans-serif', fontSize: '22px',
       color: '#2a2440', fontStyle: '700'
     }).setOrigin(0.5);
     c.add(icon);
 
     const draw = () => {
       const on = !AUDIO.muted;
-      bg.clear();
-      // shadow
-      bg.fillStyle(0x2a2440, 1);
-      bg.fillCircle(0, 3, r);
-      // body
-      bg.fillStyle(on ? 0x6deeda : 0xd8d4e8, 1);
-      bg.fillCircle(0, 0, r);
-      bg.lineStyle(2.5, 0x2a2440, 1);
-      bg.strokeCircle(0, 0, r);
+      drawPlayfulCircleBtn(bg, r, on ? 0x4fd6c4 : 0xc7c2dc, on ? 0x9ef7ea : 0xe8e4f4);
       icon.setText(on ? '🔊' : '🔇');
     };
     draw();
 
-    const hit = this.add.zone(0, 0, r * 2 + 8, r * 2 + 8);
+    // Hitbox much larger than the circle: full width, extra-tall (the row has
+    // free space above/below) so it's easy to tap with a thumb.
+    const hitW = r * 2 + 4, hitH = r * 2 + 30;
+    const hit = this.add.zone(0, 0, hitW, hitH);
     hit.setInteractive(
-      new Phaser.Geom.Rectangle(0, 0, r * 2 + 8, r * 2 + 8),
+      new Phaser.Geom.Rectangle(0, 0, hitW, hitH),
       Phaser.Geom.Rectangle.Contains
     );
     if (hit.input) hit.input.cursor = 'pointer';
@@ -3636,14 +3735,14 @@ class GameScene extends Phaser.Scene {
   // players can listen to their own music while still hearing reactions.
   _buildMusicOnlyToggle() {
     const w = this.scale.width;
-    const r = 18;
-    const cx = w - 104; // sits to the LEFT of the SOUND toggle (which is at w-60)
-    const cy = 50 + r;
+    const r = 19;       // compact; top-left of the 3-button triangle
+    const cx = w - 78;  // sits to the LEFT of the SOUND toggle (which is at w-32)
+    const cy = 70;
     const c = this.add.container(cx, cy).setScrollFactor(0).setDepth(220);
     const bg = this.add.graphics();
     c.add(bg);
     const icon = this.add.text(0, 1, '🎵', {
-      fontFamily: 'Fredoka, sans-serif', fontSize: '18px',
+      fontFamily: 'Fredoka, sans-serif', fontSize: '20px',
       color: '#2a2440', fontStyle: '700'
     }).setOrigin(0.5);
     c.add(icon);
@@ -3653,29 +3752,24 @@ class GameScene extends Phaser.Scene {
 
     const draw = () => {
       const on = !this._musicMuted;
-      bg.clear();
-      bg.fillStyle(0x2a2440, 1);
-      bg.fillCircle(0, 3, r);
-      bg.fillStyle(on ? 0xb582ff : 0xd8d4e8, 1);
-      bg.fillCircle(0, 0, r);
-      bg.lineStyle(2.5, 0x2a2440, 1);
-      bg.strokeCircle(0, 0, r);
+      drawPlayfulCircleBtn(bg, r, on ? 0xb98cff : 0xc7c2dc, on ? 0xe0caff : 0xe8e4f4);
       icon.setAlpha(on ? 1 : 0.55);
       slash.clear();
       if (!on) {
         // Diagonal strikethrough so the OFF state reads at a glance.
-        slash.lineStyle(3, 0x2a2440, 1);
+        slash.lineStyle(3.5, 0x2a2440, 1);
         slash.beginPath();
-        slash.moveTo(-r * 0.65, -r * 0.65);
-        slash.lineTo( r * 0.65,  r * 0.65);
+        slash.moveTo(-r * 0.62, -r * 0.62);
+        slash.lineTo( r * 0.62,  r * 0.62);
         slash.strokePath();
       }
     };
     draw();
 
-    const hit = this.add.zone(0, 0, r * 2 + 8, r * 2 + 8);
+    const hitW = r * 2 + 4, hitH = r * 2 + 30;
+    const hit = this.add.zone(0, 0, hitW, hitH);
     hit.setInteractive(
-      new Phaser.Geom.Rectangle(0, 0, r * 2 + 8, r * 2 + 8),
+      new Phaser.Geom.Rectangle(0, 0, hitW, hitH),
       Phaser.Geom.Rectangle.Contains
     );
     if (hit.input) hit.input.cursor = 'pointer';
@@ -5116,7 +5210,7 @@ class GameScene extends Phaser.Scene {
     if (this.debugText && this._dbgTick > 200) {
       this._dbgTick = 0;
       const fps = Math.round(this.game.loop.actualFps || 0);
-      const tw = this.tweens.getAllTweens().length;
+      const tw = this.tweens.getTweens().length;
       const pm = this.platformManager;
       this.debugText.setText(
         `fps ${fps}  plat ${pm.platforms.length}  note ${pm.notes.length}  obs ${pm.obstacles.length}  pwr ${pm.powerups.length}  flt ${this._floats.length}  tw ${tw}`
