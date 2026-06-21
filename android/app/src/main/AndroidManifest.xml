@@ -30,7 +30,7 @@
         </provider>
     </application>
 
-    <!-- Permissions -->
-
-    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Permissions: none. The game is fully offline (all assets are bundled
+         and only on-device local storage is used), so no INTERNET permission
+         is declared. -->
 </manifest>
